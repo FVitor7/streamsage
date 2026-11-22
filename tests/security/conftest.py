@@ -16,8 +16,8 @@ from streamsage.domain.exceptions import KafkaConnectionError
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
+from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
-from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
 
 GENERATED = Path(__file__).resolve().parents[2] / "docker/kafka-secure/.generated"
 SASL_PLAINTEXT_BOOTSTRAP = "localhost:9094"
@@ -34,7 +34,7 @@ def cluster_adapter(settings: Settings) -> Iterator[KafkaClusterAdapter]:
     events = KafkaErrorEvents()
     with KafkaAdminClientFactory(settings).create(events) as client:
         yield KafkaClusterAdapter(
-            KafkaMetadataSource(
+            KafkaAdminGateway(
                 client,
                 timeout_seconds=settings.kafka_request_timeout,
                 error_events=events,

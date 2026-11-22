@@ -61,6 +61,26 @@ services:
       BOOTSTRAP_SERVER: kafka:19092
     restart: "no"
 
+  # Long-running consumer so the local cluster has an *active* consumer group
+  # (`inventory-service`) with a member and partition assignment.
+  kafka-consumer:
+    image: apache/kafka:4.3.2
+    container_name: streamsage-kafka-consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint:
+      - /opt/kafka/bin/kafka-console-consumer.sh
+      - --bootstrap-server
+      - kafka:19092
+      - --topic
+      - inventory.updated
+      - --group
+      - inventory-service
+      - --consumer-property
+      - client.id=inventory-service-1
+    restart: unless-stopped
+
   # Dev-only secured broker for the `security` test suite. Not started by a
   # plain `docker compose up`; use docker/kafka-secure/setup.sh, which also
   # generates the TLS material and the SCRAM user (no secrets in Git).

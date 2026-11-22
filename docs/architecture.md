@@ -32,7 +32,7 @@ tools/call describe_topic
   → operation_boundary                (timing, logging, error mapping)
   → DescribeTopicUseCase.execute      (topic name rules, partition ordering)
   → KafkaTopicAdapter.describe_topic  (TopicReader port)
-  → KafkaMetadataSource.fetch         (AdminClient.list_topics(timeout=…))
+  → KafkaAdminGateway.request        (AdminClient.describe_topics, bounded wait)
   ← domain Topic → TopicDetailResponse (structured output)
 ```
 
@@ -44,22 +44,64 @@ to `mcp.server.mcpserver.MCPServer`. We use its decorators (`tool`,
 synchronous functions; the SDK runs them in a worker thread. As the spec
 requires, this keeps the synchronous Kafka client out of asyncio code.
 
-**One metadata call, all topics.** Both adapters use
+**Topic metadata without accidental creation.** Listings use
 `AdminClient.list_topics(timeout=…)` with no topic argument. That single
 response contains the cluster id, the controller id, the brokers and every
-topic's partitions, leaders, replicas and ISR. `describe_topic` finds the
-requested topic in this full listing. We checked against Kafka 4.3: a
-metadata request scoped to a missing topic name (`list_topics(topic=…)`)
-*did* auto-create that topic on a broker with
-`auto.create.topics.enable=true`. The local Docker broker keeps auto-creation
-enabled on purpose, and
-`test_missing_topic_raises_and_is_never_created` guards this behavior. The
-trade-off is that `describe_topic` fetches metadata for every topic. That is
-fine for M1 and can be revisited for very large clusters.
+topic's partitions, leaders, replicas and ISR. Against Kafka 4.3, a Metadata
+request scoped to a missing topic name (`list_topics(topic=…)`) *did*
+auto-create that topic on a broker with `auto.create.topics.enable=true`, so
+StreamSage never issues one.
 
-**Internal topics.** Cluster metadata does not carry an "internal" flag.
-Topics whose names start with `__`, Kafka's reserved prefix, are treated as
-internal (for example `__consumer_offsets` and `__transaction_state`).
+`describe_topic` uses the DescribeTopics admin API
+(`AdminClient.describe_topics`), which requests only the named topic. Its
+cost therefore no longer grows with the size of the cluster. It reports
+`UNKNOWN_TOPIC_OR_PART` for a missing topic and does not create it; this was
+verified against Kafka 4.3 with confluent-kafka 2.16, and
+`test_missing_topic_raises_and_is_never_created` guards it on every run. The
+local Docker broker keeps auto-creation enabled on purpose.
+
+**One gateway for every Kafka request.** Adapters never call the
+`AdminClient` directly; they go through `KafkaAdminGateway`. It applies the
+timeout and waits for future-based APIs with a bounded wait. It drains
+librdkafka's event queue after each request, and translates errors, mapping
+"does not exist" codes to `KafkaResourceNotFoundError`.
+
+**Internal topics.** Cluster metadata, which listings use, does not carry an
+"internal" flag. There, topics whose names start with `__` (Kafka's reserved
+prefix, for example `__consumer_offsets`) are treated as internal.
+`describe_topic` uses the `is_internal` flag returned by DescribeTopics.
+
+**Consumer lag.** `get_consumer_lag` combines three reads:
+DescribeConsumerGroups (state, members, assignment),
+ListConsumerGroupOffsets (committed offsets) and ListOffsets with
+`OffsetSpec.latest()` (log end offsets). It covers every partition the group
+has committed *or* is currently assigned. That way a partition that is
+assigned but has never been committed shows up with `lag: null`, instead of
+being silently omitted. Rules:
+
+- Unknown committed or end offsets give `lag: null`, never 0. `total_lag`
+  sums only known lags, and `unknown_lag_partition_count` reports the rest.
+- The end offset is the high watermark (read_uncommitted). For consumers
+  using `isolation.level=read_committed`, lag may be overstated while
+  transactions are open.
+- Offsets are read at slightly different moments, so a committed offset
+  ahead of the read end offset yields 0 rather than a negative lag.
+- A per-partition failure (for example a deleted partition) yields
+  `log_end_offset: null` for that partition only. A connection,
+  authentication or timeout failure fails the whole call, because partial
+  results would mislead.
+- Kafka answers DescribeGroups for an unknown id with an empty group in
+  state `DEAD`, not an error. StreamSage reports that as "does not exist".
+- If some brokers fail to answer a group listing, the groups that were
+  returned are still listed and a warning is logged. If all brokers fail,
+  the call fails.
+
+**Stalled partitions are an M3 feature.** The spec's M2 tool table lists
+`detect_stalled_partitions`, but proving that a consumer is not progressing
+requires comparing offsets at more than one point in time (spec, M3), and M2
+has no persistence or background sampling. Lag is a single snapshot, and high
+lag alone does not prove a stall. The tool is therefore deferred to M3, where
+offset snapshots are introduced.
 
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The

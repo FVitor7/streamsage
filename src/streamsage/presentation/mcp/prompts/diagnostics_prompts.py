@@ -5,8 +5,8 @@ from pydantic import Field
 
 _BASE_INSTRUCTIONS = """\
 You are investigating an Apache Kafka cluster through the StreamSage MCP
-server. StreamSage is read-only: it can observe metadata but cannot change
-anything in the cluster.
+server. StreamSage is read-only: it can observe the cluster but cannot change
+anything in it.
 
 Follow these steps:
 
@@ -17,12 +17,17 @@ Follow these steps:
    partition's leader, replicas and in-sync replicas (ISR). Partitions
    without a leader or with fewer in-sync replicas than replicas deserve
    attention.
-4. Report your findings in two clearly separated sections:
+4. Call `list_consumer_groups`, then `get_consumer_lag` for the groups that
+   matter (and `describe_consumer_group` to see members and assignments).
+   A lag of null means the offset is unknown, not zero. Lag is a single
+   snapshot: high lag alone does not prove a consumer is stuck, since that
+   requires seeing offsets fail to advance over time.
+5. Report your findings in two clearly separated sections:
    - **Observed**: facts returned by the tools, quoting the relevant values.
    - **Hypotheses**: possible explanations, each marked as unverified.
-5. Do not claim the cluster is fully healthy based only on this metadata.
-   Metadata does not show consumer lag, throughput, disk usage, broker
-   resource pressure or client errors. State which data you did not have.
+6. Do not claim the cluster is fully healthy based on this data. It does
+   not show throughput, disk usage, broker resource pressure or client
+   errors. State which data you did not have.
 """
 
 

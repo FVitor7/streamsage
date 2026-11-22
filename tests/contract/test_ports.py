@@ -5,14 +5,23 @@ import inspect
 import pytest
 
 from streamsage.application.ports.cluster_reader import ClusterReader
+from streamsage.application.ports.consumer_group_reader import ConsumerGroupReader
 from streamsage.application.ports.topic_reader import TopicReader
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
+from streamsage.infrastructure.kafka.kafka_consumer_group_adapter import (
+    KafkaConsumerGroupAdapter,
+)
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
-from tests.fakes import FakeClusterReader, FakeTopicReader
+from tests.fakes import FakeClusterReader, FakeConsumerGroupReader, FakeTopicReader
 
 PAIRS = [
     (ClusterReader, KafkaClusterAdapter, ["get_cluster_info"]),
     (TopicReader, KafkaTopicAdapter, ["list_topics", "describe_topic"]),
+    (
+        ConsumerGroupReader,
+        KafkaConsumerGroupAdapter,
+        ["list_consumer_groups", "describe_consumer_group", "get_consumer_lag"],
+    ),
 ]
 
 
@@ -27,15 +36,20 @@ def test_adapter_signatures_match_port(
 
 
 def test_adapters_and_fakes_satisfy_ports_structurally() -> None:
-    cluster = KafkaClusterAdapter(metadata_source=None)  # type: ignore[arg-type]
-    topic = KafkaTopicAdapter(metadata_source=None)  # type: ignore[arg-type]
+    cluster = KafkaClusterAdapter(gateway=None)  # type: ignore[arg-type]
+    topic = KafkaTopicAdapter(gateway=None)  # type: ignore[arg-type]
     assert isinstance(cluster, ClusterReader)
     assert isinstance(topic, TopicReader)
     assert isinstance(FakeClusterReader(), ClusterReader)
     assert isinstance(FakeTopicReader(), TopicReader)
+    groups = KafkaConsumerGroupAdapter(gateway=None)  # type: ignore[arg-type]
+    assert isinstance(groups, ConsumerGroupReader)
+    assert isinstance(FakeConsumerGroupReader(), ConsumerGroupReader)
 
 
-@pytest.mark.parametrize("adapter", [KafkaClusterAdapter, KafkaTopicAdapter])
+@pytest.mark.parametrize(
+    "adapter", [KafkaClusterAdapter, KafkaTopicAdapter, KafkaConsumerGroupAdapter]
+)
 def test_adapters_expose_no_write_operations(adapter: type) -> None:
     forbidden = ("create", "delete", "alter", "produce", "commit", "reset", "update")
     public = [name for name in dir(adapter) if not name.startswith("_")]

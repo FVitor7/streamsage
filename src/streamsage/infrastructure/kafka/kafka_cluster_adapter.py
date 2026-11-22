@@ -1,17 +1,17 @@
 from confluent_kafka.admin._metadata import ClusterMetadata
 
 from streamsage.domain.entities.cluster import Broker, Cluster
-from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
+from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 
 
 class KafkaClusterAdapter:
     """``ClusterReader`` backed by Kafka cluster metadata."""
 
-    def __init__(self, metadata_source: KafkaMetadataSource) -> None:
-        self._metadata_source = metadata_source
+    def __init__(self, gateway: KafkaAdminGateway) -> None:
+        self._gateway = gateway
 
     def get_cluster_info(self) -> Cluster:
-        metadata = self._metadata_source.fetch("cluster metadata request")
+        metadata = self._gateway.cluster_metadata("cluster metadata request")
         return to_cluster(metadata)
 
 
