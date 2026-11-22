@@ -1,329 +1,268 @@
+<div align="center">
+
 # StreamSage
 
-**AI-powered Kafka observability & troubleshooting MCP server.**
+**AI-powered Kafka observability & troubleshooting MCP server**
 
-StreamSage is an open-source [Model Context Protocol](https://modelcontextprotocol.io)
-server, written in Python, that lets AI agents and other MCP clients explore
-Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
-in-sync replicas. It is **read-only by design**.
+Ask your AI assistant about your Apache Kafka cluster: topics, consumer lag,
+stalled partitions, dead letter queues and messages. StreamSage answers with
+evidence, never guesses, and **never writes to Kafka**.
 
-> Status: **v1.0.0**, the first stable release. All five milestones of the
-> [roadmap](#roadmap) are complete; see the [changelog](CHANGELOG.md).
+[![CI](https://github.com/FVitor7/streamsage/actions/workflows/ci.yml/badge.svg)](https://github.com/FVitor7/streamsage/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/FVitor7/streamsage)](https://github.com/FVitor7/streamsage/releases)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![MCP](https://img.shields.io/badge/protocol-MCP-8A2BE2)](https://modelcontextprotocol.io)
 
-## Why
+</div>
 
-The information needed to operate Kafka is spread across topics, partitions,
-brokers, consumer groups, offsets and configs, usually reached through several
-CLI tools. StreamSage puts that information behind one consistent, typed,
-read-only interface. Your MCP client (Claude Desktop, Cursor, …) runs the
-tools and reasons over the results.
+---
 
-The server does not call any LLM. It returns data, and in later milestones it
-will also return deterministic, evidence-based diagnostics.
+## What it looks like
+
+> **You:** Which consumer group is furthest behind, and is it stuck?
+>
+> **Claude** _(calls `list_consumer_groups`, `get_consumer_lag`, `analyze_consumer_health`, `detect_stalled_partitions`)_:
+>
+> **Observed**
+> - `orders-service` has the highest lag: **180 messages** on `orders.created`
+>   (partition 2: 66, partition 1: 60, partition 0: 54).
+> - The group has **no active members** (state `empty`).
+> - Over a 5-second sample, the committed offset of all 3 partitions did not
+>   move (`not_advancing`).
+>
+> **Hypotheses (unverified)**
+> - The consuming application may be stopped or unable to join the group.
+>
+> **Next step:** check whether the `orders-service` application is running
+> and can reach the cluster.
+
+Every number above comes from a real run against the bundled sample
+environment. See [docs/usage.md](docs/usage.md) for more conversations.
+
+## Why StreamSage
+
+Investigating Kafka usually means juggling `kafka-topics.sh`,
+`kafka-consumer-groups.sh`, a web UI and tribal knowledge. StreamSage puts
+that knowledge behind the [Model Context Protocol](https://modelcontextprotocol.io),
+so any MCP client (Claude Code, Claude Desktop, MCP Inspector, …) can run the
+investigation for you.
+
+| Principle | What it means |
+| --- | --- |
+| **Read-only by design** | No tool can produce messages, move offsets, or create, delete or alter anything. |
+| **Evidence, not guesses** | Diagnostics return findings with evidence, unverified hypotheses and recommendations, and never assert a root cause. |
+| **Honest about gaps** | Unknown lag is `null`, never `0`. Partial scans and missing data are stated explicitly. |
+| **Private by default** | Message payloads are off unless enabled. Sensitive fields are redacted, and nothing is ever logged. |
+| **Safe for production** | Bounded reads, explicit timeouts, SASL/TLS, bearer-token HTTP with scopes, Prometheus metrics. |
 
 ## Features
 
-| Kind     | Name                        | Description                                                     |
-| -------- | --------------------------- | --------------------------------------------------------------- |
-| Tool     | `get_cluster_info`          | Cluster id, brokers (id/host/port), controller id               |
-| Tool     | `list_topics`               | Topics with partition count and replication factor; `include_internal: bool` |
-| Tool     | `describe_topic`            | Per-partition leader, replicas and ISR; under-replicated/leaderless counts |
-| Tool     | `list_consumer_groups`      | Consumer groups with their state; optional `states` filter      |
-| Tool     | `describe_consumer_group`   | State, assignor, coordinator, members and their partitions      |
-| Tool     | `get_consumer_lag`          | Per-partition lag, largest first, with total/max lag; `max_partitions` |
-| Tool     | `analyze_consumer_health`   | healthy / warning / critical / unknown, with evidence-backed findings and limitations |
-| Tool     | `detect_stalled_partitions` | Samples offsets twice (`interval_seconds`, 1–60) and reports partitions that did not advance |
-| Tool     | `inspect_messages`          | Newest (or from an offset) messages: key, headers, timestamp, offset, size; payload only if enabled, sanitized |
-| Tool     | `find_messages_by_key`      | Newest messages with an exact key, scanning bounded ranges and reporting coverage |
-| Tool     | `list_dlq_topics`           | Topics matching `STREAMSAGE_DLQ_TOPICS`, with approximate message counts |
-| Resource | `kafka://cluster/info`      | Cluster info as JSON                                            |
-| Resource | `kafka://topics`            | Topic list as JSON                                              |
-| Prompt   | `investigate_kafka_cluster` | Guided, evidence-based investigation (optional `focus_topic`)   |
+| Area | Tools | Highlights |
+| --- | --- | --- |
+| **Cluster** | `get_cluster_info` · `list_topics` · `describe_topic` | Brokers, partitions, leaders, ISR, under-replicated and leaderless partitions |
+| **Consumers** | `list_consumer_groups` · `describe_consumer_group` · `get_consumer_lag` | Members, assignments, per-partition lag, largest first |
+| **Diagnostics** | `analyze_consumer_health` · `detect_stalled_partitions` | Healthy, warning, critical or unknown, with evidence; progress over time |
+| **Messages** | `inspect_messages` · `find_messages_by_key` · `list_dlq_topics` | Bounded, sanitized reads, key search with coverage report, configurable DLQs |
+| **Context** | `kafka://cluster/info` · `kafka://topics` · `investigate_kafka_cluster` | Resources and a guided investigation prompt |
 
-Every tool has a typed input schema and structured output, and is annotated
-`readOnlyHint: true`. Internal topics (`__*`) are hidden by default.
-`describe_topic` never creates topics, even on brokers that have
-auto-creation enabled; the integration tests verify this.
-
-Lag is reported per partition as `log_end_offset - committed_offset`. A
-partition the group has never committed has `lag: null`. StreamSage never
-reports unknown lag as 0. Lag is a single snapshot: high lag alone does not
-prove a consumer is stuck. `detect_stalled_partitions` checks progress by
-sampling committed offsets twice within one call.
-
-Every diagnostic finding states what was observed and the evidence behind
-it. Possible explanations go in a separate `hypotheses` list, and next steps
-in `recommendations`. No finding asserts a root cause.
+The full reference, with parameters and real example responses, is in
+[docs/tools.md](docs/tools.md).
 
 ## Architecture
 
-Clean Architecture with Ports and Adapters. Dependencies point inward, and the
-domain is plain Python with no Kafka, MCP or Pydantic imports.
+```mermaid
+flowchart LR
+    subgraph clients["MCP clients"]
+        cc["Claude Code"]
+        cd["Claude Desktop"]
+        mi["MCP Inspector"]
+    end
 
-```text
-MCP client ──stdio──▶ Presentation (MCP tools/resources/prompts)
-                            │
-                            ▼
-                      Application (use cases, ports)
-                            │
-                ┌───────────┴───────────┐
-                ▼                       ▼
-         Domain (entities,       Infrastructure (Kafka adapters,
-         rules, errors)          confluent-kafka, settings)
-                                        │
-                                        ▼
-                                  Apache Kafka
+    subgraph streamsage["StreamSage (read-only)"]
+        direction TB
+        p["Presentation<br/>tools · resources · prompt<br/>auth · scopes · metrics"]
+        a["Application<br/>use cases · ports"]
+        d["Domain<br/>entities · diagnostics · sanitizer"]
+        i["Infrastructure<br/>Kafka adapters · settings"]
+        p --> a --> d
+        i -. implements ports .-> a
+    end
+
+    kafka[("Apache Kafka")]
+
+    clients -- "stdio or Streamable HTTP" --> p
+    i -- "Admin API ·<br/>assign-only consumer" --> kafka
 ```
 
-See [docs/architecture.md](docs/architecture.md) for details and decisions.
+Clean Architecture with Ports and Adapters: the domain knows nothing about
+Kafka or MCP. See [docs/architecture.md](docs/architecture.md) for the
+design, request flows and decisions.
 
-## Requirements
+## Quick start
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- Docker (for the local Kafka broker)
+There are two ways to run StreamSage. Pick the one that matches what you
+want to do:
 
-## Installation
+| | **Use it** (release package) | **Develop it** (source checkout) |
+| --- | --- | --- |
+| For | Querying your Kafka clusters from an AI assistant | Changing StreamSage, running its tests |
+| Get it | `uv tool install <release wheel>` | `git clone` + `uv sync` |
+| Command the client runs | `streamsage` | `uv run --directory <checkout> streamsage` |
+| Code it runs | The released version, fixed | Your working tree, live |
+| Guide | [Getting started → Use it](docs/getting-started.md#option-a-use-the-release-package) | [Getting started → Develop it](docs/getting-started.md#option-b-run-from-source-development) and [development.md](docs/development.md) |
 
-StreamSage is distributed through
-[GitHub Releases](https://github.com/FVitor7/streamsage/releases), not PyPI.
-Install the released wheel as a tool:
+### Use it: install the release package
+
+**Requirements:** Python 3.12+ and [uv](https://docs.astral.sh/uv/) (or pip).
 
 ```bash
 uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.0.0/streamsage-1.0.0-py3-none-any.whl
 streamsage --help
+
+# Connect Claude Code to your cluster
+claude mcp add streamsage -s user \
+  -e STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
+  -- streamsage
 ```
 
-Or run a tagged version straight from the repository:
+### Develop it: run from source
+
+**Requirements:** Python 3.12+, [uv](https://docs.astral.sh/uv/) and Docker.
 
 ```bash
-uvx --from git+https://github.com/FVitor7/streamsage@v1.0.0 streamsage
-```
-
-## Quick start
-
-```bash
-# 1. Start a local Kafka broker (KRaft, single node) and create sample topics
-docker compose up -d --wait kafka
-docker compose run --rm kafka-init
-
-# 2. Install dependencies
+git clone https://github.com/FVitor7/streamsage.git && cd streamsage
 uv sync
 
-# 3. Run the MCP server (stdio). Normally your MCP client launches it for you.
-uv run streamsage
+# Kafka (KRaft) with pre-populated topics, consumer groups, lag and a DLQ (~30 s)
+make kafka-up
+
+# Connect Claude Code to your working tree
+claude mcp add streamsage-dev -s local \
+  -e STREAMSAGE_DLQ_TOPICS='*.DLQ' \
+  -e STREAMSAGE_MESSAGE_PAYLOADS_ENABLED=true \
+  -- uv run --directory "$PWD" streamsage
 ```
 
-Explore it interactively with the MCP Inspector:
+The sample environment is part of the repository, not the package. To try
+it with the release package, clone the tag (`git clone --branch v1.0.0 …`)
+and run `make kafka-up`: it only needs Docker.
 
-```bash
-npx @modelcontextprotocol/inspector uv run --directory "$PWD" streamsage
-```
+Then start a new Claude Code session and ask: *"What topics are in this
+Kafka cluster?"* A web UI for the sample cluster runs at
+http://localhost:8080.
 
-Or call tools from the command line with the Inspector CLI:
-
-```bash
-npx @modelcontextprotocol/inspector --cli uv run --directory "$PWD" streamsage \
-  --method tools/call --tool-name describe_topic --tool-arg topic_name=orders.created
-```
-
-A web UI for the local cluster (kafbat/kafka-ui) runs at http://localhost:8080
-after `docker compose up -d`.
-
-Stop Kafka with `docker compose down` (add `-v` to delete its data volume).
-
-## HTTP transport
-
-StreamSage speaks stdio by default. To serve several clients, or a client on
-another machine, run it over **Streamable HTTP** with bearer tokens:
-
-```bash
-# 1. Create a token. Only its SHA-256 hash goes into the server config.
-uv run streamsage generate-token --name claude-code --scope kafka:metadata --scope kafka:messages
-
-# 2. Start the server with the printed entry
-STREAMSAGE_TRANSPORT=http \
-STREAMSAGE_HTTP_TOKENS='[{"name": "claude-code", "sha256": "<hash>", "scopes": ["kafka:metadata", "kafka:messages"]}]' \
-uv run streamsage
-
-# 3. Point a client at it
-claude mcp add --transport http streamsage http://127.0.0.1:8000/mcp \
-  --header "Authorization: Bearer <token>"
-```
-
-| Scope            | Grants                                                                   |
-| ---------------- | ------------------------------------------------------------------------ |
-| `kafka:metadata` | Cluster, topics, consumer groups, lag, health, stalled partitions, DLQs, resources |
-| `kafka:messages` | `inspect_messages`, `find_messages_by_key`                               |
-
-A client only sees the tools its token allows. HTTP mode refuses to start
-without at least one token. It binds to `127.0.0.1` by default; to expose
-it, set `STREAMSAGE_HTTP_HOST` and put a TLS-terminating reverse proxy in
-front, because StreamSage serves plain HTTP.
-
-### Metrics and health
-
-In HTTP mode, StreamSage also serves:
-
-- `GET /healthz`: liveness check, public, does not contact Kafka.
-- `GET /metrics`: Prometheus metrics. Requires a valid token unless
-  `STREAMSAGE_HTTP_METRICS_PUBLIC=true`.
-
-| Metric | Labels |
+| Guide | Contents |
 | --- | --- |
-| `streamsage_tool_calls_total` | `tool`, `outcome` (`success`, `error`, `crash`) |
-| `streamsage_tool_duration_seconds` | `tool` |
-| `streamsage_kafka_requests_total` | `operation`, `outcome` (`success`, `not_found`, `failure`) |
-| `streamsage_kafka_request_duration_seconds` | `operation` |
-| `streamsage_http_auth_failures_total` | `reason` |
-| `streamsage_authorization_denials_total` | `target` |
-| `streamsage_build_info` | `version` |
+| [Getting started](docs/getting-started.md) | Both setups, the sample environment, first questions |
+| [Connecting clients](docs/clients.md) | Claude Code, Claude Desktop, MCP Inspector, HTTP mode |
+| [Usage and example questions](docs/usage.md) | What to ask, what to expect, investigation walkthroughs |
 
-Tool names that StreamSage does not define are recorded as `unknown`, so
-clients cannot create unbounded label values. A Prometheus scrape job with a
-token:
+## What you can ask
 
-```yaml
-scrape_configs:
-  - job_name: streamsage
-    metrics_path: /metrics
-    authorization:
-      credentials_file: /etc/prometheus/streamsage.token
-    static_configs:
-      - targets: ["streamsage:8000"]
-```
+| Question | Tools StreamSage uses | Answer on the sample data |
+| --- | --- | --- |
+| "What topics exist in this cluster?" | `list_topics` | 5 topics, e.g. `orders.created` with 3 partitions |
+| "Is any partition under-replicated or without a leader?" | `describe_topic` | None; every partition has a leader and full ISR |
+| "Which consumer groups have the highest lag?" | `list_consumer_groups`, `get_consumer_lag` | `orders-service`: 180 messages |
+| "Is `orders-service` healthy?" | `analyze_consumer_health` | `warning`: no active members while messages are pending |
+| "Is `orders-service` stuck?" | `detect_stalled_partitions` | All 3 partitions `not_advancing` during the sample |
+| "Do we have messages in a DLQ? Why did they fail?" | `list_dlq_topics`, `inspect_messages` | `orders.created.DLQ`: 2 messages, `error.message` headers |
+| "Show me the latest customer updates." | `inspect_messages` | Emails, passwords and phones shown as `[REDACTED]` |
+| "Find the message with key `key-288`." | `find_messages_by_key` | Found at partition 0, offset 91; whole topic scanned |
 
-## Kafka configuration
+More questions, grouped by scenario, are in [docs/usage.md](docs/usage.md).
 
-StreamSage reads its configuration from environment variables prefixed with
-`STREAMSAGE_`, or from a `.env` file in the working directory. See
-[.env.example](.env.example).
+## Installation
 
-| Variable                              | Default          | Notes                                                |
-| ------------------------------------- | ---------------- | ---------------------------------------------------- |
-| `STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS`  | `localhost:9092` | Comma-separated `host:port` list                     |
-| `STREAMSAGE_KAFKA_SECURITY_PROTOCOL`  | `PLAINTEXT`      | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, `SASL_SSL`     |
-| `STREAMSAGE_KAFKA_SASL_MECHANISM`     | –                | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`            |
-| `STREAMSAGE_KAFKA_SASL_USERNAME`      | –                | Required with `SASL_*`                               |
-| `STREAMSAGE_KAFKA_SASL_PASSWORD`      | –                | Required with `SASL_*`; never logged                 |
-| `STREAMSAGE_KAFKA_SSL_CA_LOCATION`    | –                | CA bundle for `SSL`/`SASL_SSL` (defaults to system)  |
-| `STREAMSAGE_KAFKA_REQUEST_TIMEOUT`    | `10`             | Seconds; upper bound for each metadata request       |
-| `STREAMSAGE_KAFKA_SOCKET_TIMEOUT`     | `10`             | Seconds                                              |
-| `STREAMSAGE_LOG_LEVEL`                | `INFO`           | Logs go to stderr as JSON lines                      |
-| `STREAMSAGE_TRANSPORT`                | `stdio`          | `stdio` or `http` (Streamable HTTP)                  |
-| `STREAMSAGE_HTTP_HOST` / `_PORT`      | `127.0.0.1` / `8000` | HTTP listen address (path `/mcp`)                |
-| `STREAMSAGE_HTTP_TOKENS`              | `[]`             | JSON list of `{name, sha256, scopes}`; required for HTTP |
-| `STREAMSAGE_HTTP_METRICS_PUBLIC`      | `false`          | Serve `/metrics` without a token                     |
-| `STREAMSAGE_INCLUDE_INTERNAL_TOPICS`  | `false`          | Default for `list_topics` and `kafka://topics`       |
-| `STREAMSAGE_LAG_WARNING_THRESHOLD`    | `1000`           | Per-partition lag (messages) for a `warning` finding |
-| `STREAMSAGE_LAG_CRITICAL_THRESHOLD`   | `10000`          | Per-partition lag for `critical`; must be ≥ warning  |
-| `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` | `{}`           | JSON map of finding code → `info`/`warning`/`critical` |
-| `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` | `false`          | Return sanitized payload previews (otherwise size only) |
-| `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` | `1024`          | Payload preview limit (1–65536)                      |
-| `STREAMSAGE_MESSAGE_DEFAULT_LIMIT`    | `20`             | Messages per `inspect_messages` call by default      |
-| `STREAMSAGE_MESSAGE_MAX_LIMIT`        | `100`            | Maximum messages per call (≤ 1000)                   |
-| `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` | –                | Extra field/header names to redact, comma-separated  |
-| `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION` | `1000` | Newest messages scanned per partition by key search |
-| `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` | `10000`      | Total key search budget, split across partitions     |
-| `STREAMSAGE_DLQ_TOPICS`               | –                | DLQ topic names/glob patterns, e.g. `*.DLQ,dead-letter-*` |
+StreamSage is distributed as a Python package through
+[GitHub Releases](https://github.com/FVitor7/streamsage/releases), not PyPI.
 
-The server checks for inconsistent settings at startup, for example a SASL
-protocol without credentials, or credentials without a SASL protocol. If it
-finds any, it exits with a message that never includes configured values.
-`PLAINTEXT` is meant for local development only; the server logs a warning
-when traffic to a non-loopback broker would be unencrypted.
+| Method | Command | Notes |
+| --- | --- | --- |
+| **uv tool** (recommended) | `uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.0.0/streamsage-1.0.0-py3-none-any.whl` | Isolated environment; `streamsage` goes on your `PATH` (`~/.local/bin`) |
+| **uvx** (no install) | `uvx --from <wheel URL> streamsage` | Runs on demand; handy for trying it or in MCP client configs |
+| **pip** | `pip install <wheel URL>` | Inside a virtual environment you manage |
+| **From a tag** | `uvx --from git+https://github.com/FVitor7/streamsage@v1.0.0 streamsage` | Builds from source at that tag |
 
-Example for a managed cluster using SASL/SCRAM over TLS:
+Upgrade with `uv tool install --force <new wheel URL>`, and uninstall with
+`uv tool uninstall streamsage`. Every release lists its wheel and changelog
+on the [releases page](https://github.com/FVitor7/streamsage/releases).
 
-```bash
-STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS=broker-1.example.com:9096,broker-2.example.com:9096
-STREAMSAGE_KAFKA_SECURITY_PROTOCOL=SASL_SSL
-STREAMSAGE_KAFKA_SASL_MECHANISM=SCRAM-SHA-512
-STREAMSAGE_KAFKA_SASL_USERNAME=streamsage-readonly
-STREAMSAGE_KAFKA_SASL_PASSWORD=...
-```
+## Configuration
 
-## MCP client configuration
+Configuration comes from `STREAMSAGE_*` environment variables (or a local
+`.env`). The most common ones:
 
-Claude Desktop (`claude_desktop_config.json`); see
-[examples/claude_desktop.json](examples/claude_desktop.json):
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka bootstrap servers |
+| `STREAMSAGE_KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, `SASL_SSL` |
+| `STREAMSAGE_TRANSPORT` | `stdio` | `stdio` or `http` (Streamable HTTP) |
+| `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` | `false` | Include sanitized payload previews |
+| `STREAMSAGE_DLQ_TOPICS` | – | DLQ names or globs, e.g. `*.DLQ` |
+| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition lag for a `warning` finding |
 
-```json
-{
-  "mcpServers": {
-    "streamsage": {
-      "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/streamsage", "streamsage"],
-      "env": { "STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS": "localhost:9092" }
-    }
-  }
-}
-```
-
-Claude Code:
-
-```bash
-claude mcp add streamsage -- uv run --directory /absolute/path/to/streamsage streamsage
-```
-
-Then ask things like *"What topics are available in this cluster?"*,
-*"Which consumer groups have the highest lag?"* or *"Investigate the
-`orders.created` topic."*
+Every variable, with SASL/TLS and HTTP examples, is documented in
+[docs/configuration.md](docs/configuration.md).
 
 ## Security model
 
-- **Read-only.** No code path produces messages, creates or deletes topics,
-  changes offsets or alters configuration. Also enforce this with Kafka ACLs:
-  give StreamSage `Describe` permissions, plus `Read` on topics only if you
-  want `inspect_messages`.
-- **Message privacy.** Payloads are omitted unless
-  `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED=true`. Even then, JSON fields and
-  headers with sensitive names are redacted and previews are truncated.
-  Message contents are never logged. Message inspection never joins a
-  consumer group or commits offsets.
-- **Credentials come from the operator**, through the environment. MCP clients
-  cannot supply them per call.
-- **No secret leakage.** Passwords are `SecretStr`. Logs, tool errors and
-  resources never include credentials, and clients never see stack traces.
-- **Bounded.** Every Kafka call has an explicit timeout.
-- **Transports.** stdio (local process) or Streamable HTTP with bearer
-  tokens, stored as SHA-256 hashes and compared in constant time, plus
-  per-tool scopes. Token values are never logged.
-
-See [docs/security.md](docs/security.md).
-
-## Development and tests
-
-```bash
-make check             # ruff lint + format check, mypy (strict), unit tests with coverage
-make kafka-up          # start Kafka and create sample topics
-make test-integration  # tests against the real broker, including an end-to-end stdio test
-make kafka-secure-up   # secured broker (SASL/SCRAM + TLS) with generated test credentials
-make test-security     # SASL/TLS tests, including stdio over SASL_SSL
+```mermaid
+flowchart LR
+    req["MCP request"] --> t{"Transport?"}
+    t -- stdio --> trusted["Local process<br/>started by the user"]
+    t -- HTTP --> auth{"Valid bearer token?<br/>(SHA-256, constant time)"}
+    auth -- no --> r401["401 Unauthorized"]
+    auth -- yes --> scope{"Token has the<br/>tool's scope?"}
+    scope -- no --> denied["Error result,<br/>tool hidden from tools/list"]
+    scope -- yes --> trusted
+    trusted --> tool["Read-only tool<br/>bounded, timed out"]
+    tool --> kafka[("Kafka<br/>Describe / Read ACLs")]
 ```
 
-Unit tests need no broker; integration tests are marked `integration` and are
-excluded by default. See [docs/development.md](docs/development.md).
+- **Read-only** in code and, ideally, in Kafka ACLs: `Describe` permissions,
+  plus `Read` on topics only for message inspection.
+- **Credentials** come from the operator's environment. Passwords are
+  secrets and never appear in logs, errors or responses.
+- **HTTP tokens** are stored as SHA-256 hashes. There are two scopes:
+  `kafka:metadata` and `kafka:messages`.
+- **Message privacy:** payloads are omitted by default, and when enabled,
+  sensitive JSON fields and headers are redacted before truncation.
+
+Details and limits are in [docs/security.md](docs/security.md).
+
+## Documentation
+
+| Document | For |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | First run with the sample environment |
+| [Connecting clients](docs/clients.md) | Claude Code, Claude Desktop, MCP Inspector, HTTP |
+| [Usage and example questions](docs/usage.md) | Questions to ask and investigation walkthroughs |
+| [Tool reference](docs/tools.md) | Every tool, resource and prompt, with real responses |
+| [Configuration](docs/configuration.md) | All environment variables and ready-made profiles |
+| [Architecture](docs/architecture.md) | Layers, request flows, design decisions |
+| [Security](docs/security.md) | ACLs, authentication, data protection |
+| [Development](docs/development.md) | Tests, local brokers, CI, releasing |
+| [Changelog](CHANGELOG.md) | Release history |
+| [Project specification](PROJECT_SPEC.md) | The original specification |
 
 ## Roadmap
 
-- **M1 — Foundation & Cluster Explorer** ✅ cluster info, topics, partitions
-- **M2 — Consumer Intelligence** ✅ consumer groups, lag, health analysis
-  with configurable thresholds
-- **M3 — Diagnostics Engine** ✅ structured findings with evidence,
-  hypotheses and recommendations; configurable severity; stalled-partition
-  detection by comparing offsets over time
-- **M4 — Message Intelligence** ✅ bounded, sanitized message inspection,
-  key search and configurable DLQ topics
-- **M5 — Production Readiness** ✅ Streamable HTTP with bearer tokens and
-  scopes, Prometheus metrics, v1.0 release
+| Milestone | Status |
+| --- | --- |
+| M1 — Foundation & cluster explorer | ✅ v1.0.0 |
+| M2 — Consumer intelligence | ✅ v1.0.0 |
+| M3 — Diagnostics engine | ✅ v1.0.0 |
+| M4 — Message intelligence | ✅ v1.0.0 |
+| M5 — Production readiness | ✅ v1.0.0 |
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run `make check` (and
-`make test-integration` for Kafka-facing changes) before opening a PR, and
-keep the dependency rule: no Kafka or MCP imports in `domain/` or
-`application/`.
+Issues and pull requests are welcome. Before opening a PR, run `make check`,
+plus `make test-integration` for changes that touch Kafka. Keep the
+dependency rule: no Kafka or MCP imports in `domain/` or `application/`. See
+[docs/development.md](docs/development.md).
 
 ## License
 

@@ -1,50 +1,181 @@
 # Architecture
 
-StreamSage follows Clean Architecture combined with Ports and Adapters.
+StreamSage follows **Clean Architecture** combined with **Ports and
+Adapters** (hexagonal architecture). The domain holds the rules (lag, health,
+progress, sanitization) as pure Python, with no Kafka and no MCP. Everything
+external plugs in through ports.
+
+## Layers
+
+```mermaid
+flowchart TB
+    subgraph presentation["Presentation · presentation/"]
+        direction LR
+        http["http/<br/>bearer auth · /metrics · /healthz"]
+        mcp["mcp/<br/>tools · resources · prompt<br/>scope authorization · metrics middleware<br/>response schemas"]
+    end
+    subgraph application["Application · application/"]
+        direction LR
+        uc["use_cases/<br/>one class per use case"]
+        ports["ports/<br/>ClusterReader · TopicReader<br/>ConsumerGroupReader · MessageReader"]
+    end
+    subgraph domain["Domain · domain/"]
+        direction LR
+        ent["entities/ · value_objects/<br/>Cluster · Topic · ConsumerGroup · PartitionLag"]
+        diag["diagnostics/<br/>health · progress · findings · severity"]
+        msg["messages/<br/>read planning · sanitizer · DLQ matcher"]
+    end
+    subgraph infrastructure["Infrastructure · infrastructure/"]
+        direction LR
+        kafka["kafka/<br/>gateway · adapters · consumer · error translation"]
+        cfg["config/<br/>Settings (pydantic-settings)"]
+    end
+    root["main.py · composition root"]
+
+    presentation --> application --> domain
+    infrastructure -. implements .-> ports
+    infrastructure --> domain
+    root --> presentation & application & infrastructure
+```
 
 ```text
 src/streamsage/
-├── domain/           Pure Python: entities, value objects, rules, errors
-├── application/      Use cases and ports (typing.Protocol)
-├── infrastructure/   Settings and Kafka adapters (confluent-kafka)
-├── presentation/mcp/ MCP server: tools, resources, prompts, response schemas
-├── shared/           Cross-cutting: JSON logging
-└── main.py           Composition root
+├── domain/              Pure Python: entities, value objects, diagnostics, message rules
+├── application/         Use cases and ports (typing.Protocol)
+├── infrastructure/      Settings and Kafka adapters (confluent-kafka)
+├── presentation/
+│   ├── mcp/             MCP server: tools, resources, prompt, schemas, middlewares
+│   └── http/            Streamable HTTP app: bearer auth, /metrics, /healthz
+├── shared/              Cross-cutting: JSON logging, Prometheus metrics
+└── main.py              Composition root and CLI (serve, generate-token)
 ```
 
 ## Dependency rule
 
-- `domain` imports nothing outside itself and the standard library.
-- `application` imports `domain` only. It declares the ports `ClusterReader`
-  and `TopicReader`.
-- `infrastructure` implements the ports and is the only layer that imports
-  `confluent_kafka`.
-- `presentation` imports `application` and `domain`, and is the only layer
-  that imports `mcp`.
-- `main.py` is the only place that creates concrete objects and wires them
-  together.
+| Layer | May import | Must not import |
+| --- | --- | --- |
+| `domain` | the standard library | anything else in the project, `confluent_kafka`, `mcp`, `pydantic` |
+| `application` | `domain` | `infrastructure`, `presentation`, `confluent_kafka`, `mcp` |
+| `infrastructure` | `domain`, `application` (ports), `shared` | `presentation`, `mcp` |
+| `presentation` | `application`, `domain`, `shared`; `infrastructure.config` (settings) in `presentation/http` only | `confluent_kafka`, Kafka adapters |
+| `main.py` | everything | – (the only place that creates concrete objects) |
+
+Contract tests check that every Kafka adapter matches its port's signatures,
+and that no adapter exposes a write-style method.
+
+## Ports and adapters
+
+| Port (application) | Adapter (infrastructure) | Kafka APIs used |
+| --- | --- | --- |
+| `ClusterReader` | `KafkaClusterAdapter` | Metadata (all topics) |
+| `TopicReader` | `KafkaTopicAdapter` | Metadata (all topics), DescribeTopics |
+| `ConsumerGroupReader` | `KafkaConsumerGroupAdapter` | ListGroups, DescribeGroups, OffsetFetch, ListOffsets |
+| `MessageReader` | `KafkaMessageAdapter` | DescribeTopics, watermarks, assign-only consumer fetch |
+
+Every admin request goes through `KafkaAdminGateway`, which applies timeouts,
+drains librdkafka events, translates errors and records metrics.
 
 ## Request flow
 
-```text
-tools/call describe_topic
-  → topic_tools.describe_topic        (schema validation by the SDK)
-  → operation_boundary                (timing, logging, error mapping)
-  → DescribeTopicUseCase.execute      (topic name rules, partition ordering)
-  → KafkaTopicAdapter.describe_topic  (TopicReader port)
-  → KafkaAdminGateway.request        (AdminClient.describe_topics, bounded wait)
-  ← domain Topic → TopicDetailResponse (structured output)
+How a tool call travels through the layers (HTTP transport shown; over
+stdio the first two steps do not exist):
+
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant A as BearerAuthMiddleware<br/>(ASGI)
+    participant M as MetricsMiddleware<br/>(MCP)
+    participant Z as ScopeAuthorization<br/>Middleware (MCP)
+    participant T as Tool (presentation)
+    participant U as Use case
+    participant D as Domain rules
+    participant G as Adapter + gateway
+    participant K as Kafka
+
+    C->>A: POST /mcp · tools/call get_consumer_lag
+    A->>A: verify token hash → Principal
+    A->>M: request (principal on ASGI scope)
+    M->>Z: start timer
+    Z->>Z: tool requires kafka:metadata?
+    Z->>T: allowed
+    T->>U: execute(group_id) inside operation_boundary
+    U->>G: describe group, offsets, end offsets
+    G->>K: DescribeGroups · OffsetFetch · ListOffsets
+    K-->>G: results
+    G-->>U: domain objects (PartitionLag…)
+    U->>D: ConsumerGroupLag (ordering, totals, unknown ≠ 0)
+    D-->>T: ConsumerGroupLag
+    T-->>M: ConsumerLagResponse (structured JSON)
+    M-->>C: result · tool_calls_total{outcome}
+```
+
+`operation_boundary` logs each operation with its correlation id and
+duration, and converts anticipated errors into safe MCP errors. Any other
+exception reaches the client only as a generic message.
+
+## Key flows
+
+### Lag computation
+
+```mermaid
+flowchart LR
+    g["DescribeGroups<br/>members + assignment"] --> parts
+    o["OffsetFetch<br/>committed offsets"] --> parts["partitions =<br/>committed ∪ assigned"]
+    parts --> e["ListOffsets latest<br/>(high watermark)"]
+    e --> lag{"committed and end<br/>both known?"}
+    lag -- yes --> v["lag = max(end − committed, 0)"]
+    lag -- no --> n["lag = null<br/>(never 0)"]
+    v & n --> sort["sort: largest first,<br/>unknown last"]
+```
+
+### Sanitization pipeline
+
+```mermaid
+flowchart LR
+    raw["Raw message<br/>(bytes, never logged)"] --> en{"Payloads<br/>enabled?"}
+    en -- no --> om["omitted<br/>size only"]
+    en -- yes --> u{"UTF-8?"}
+    u -- no --> bin["binary<br/>size only"]
+    u -- yes --> j{"JSON?"}
+    j -- yes --> red["redact sensitive fields<br/>recursively"] --> tr1["truncate"] --> jr["json_redacted"]
+    j -- no --> tr2["truncate"] --> tt["text_truncated"]
+    raw --> h["headers: sensitive names<br/>→ [REDACTED]"]
 ```
 
 ## Decisions
 
-**MCP SDK 2.x (`MCPServer`).** In `mcp` 2.x, the v1 `FastMCP` class is renamed
+- [MCP SDK 2.x (`MCPServer`)](#mcp-sdk-2x-mcpserver)
+- [Topic metadata without accidental creation](#topic-metadata-without-accidental-creation)
+- [One gateway for every Kafka request](#one-gateway-for-every-kafka-request)
+- [Internal topics](#internal-topics)
+- [Consumer lag](#consumer-lag)
+- [Consumer health](#consumer-health)
+- [Findings](#findings)
+- [Configurable severity](#configurable-severity)
+- [Stalled partitions (`detect_stalled_partitions`)](#stalled-partitions-detect_stalled_partitions)
+- [Message inspection](#message-inspection)
+- [Key search](#key-search)
+- [DLQ topics](#dlq-topics)
+- [HTTP transport and authorization](#http-transport-and-authorization)
+- [Metrics](#metrics)
+- [Controller id in KRaft](#controller-id-in-kraft)
+- [Missing data is `None`](#missing-data-is-none)
+- [Response schemas live in presentation](#response-schemas-live-in-presentation)
+- [Error handling](#error-handling)
+- [Lifecycle](#lifecycle)
+- [Logging](#logging)
+
+### MCP SDK 2.x (`MCPServer`)
+
+In `mcp` 2.x, the v1 `FastMCP` class is renamed
 to `mcp.server.mcpserver.MCPServer`. We use its decorators (`tool`,
 `resource`, `prompt`) and run it with `run("stdio")`. Tool handlers are plain
 synchronous functions; the SDK runs them in a worker thread. As the spec
 requires, this keeps the synchronous Kafka client out of asyncio code.
 
-**Topic metadata without accidental creation.** Listings use
+### Topic metadata without accidental creation
+
+Listings use
 `AdminClient.list_topics(timeout=…)` with no topic argument. That single
 response contains the cluster id, the controller id, the brokers and every
 topic's partitions, leaders, replicas and ISR. Against Kafka 4.3, a Metadata
@@ -60,18 +191,24 @@ verified against Kafka 4.3 with confluent-kafka 2.16, and
 `test_missing_topic_raises_and_is_never_created` guards it on every run. The
 local Docker broker keeps auto-creation enabled on purpose.
 
-**One gateway for every Kafka request.** Adapters never call the
+### One gateway for every Kafka request
+
+Adapters never call the
 `AdminClient` directly; they go through `KafkaAdminGateway`. It applies the
 timeout and waits for future-based APIs with a bounded wait. It drains
 librdkafka's event queue after each request, and translates errors, mapping
 "does not exist" codes to `KafkaResourceNotFoundError`.
 
-**Internal topics.** Cluster metadata, which listings use, does not carry an
+### Internal topics
+
+Cluster metadata, which listings use, does not carry an
 "internal" flag. There, topics whose names start with `__` (Kafka's reserved
 prefix, for example `__consumer_offsets`) are treated as internal.
 `describe_topic` uses the `is_internal` flag returned by DescribeTopics.
 
-**Consumer lag.** `get_consumer_lag` combines three reads:
+### Consumer lag
+
+`get_consumer_lag` combines three reads:
 DescribeConsumerGroups (state, members, assignment),
 ListConsumerGroupOffsets (committed offsets) and ListOffsets with
 `OffsetSpec.latest()` (log end offsets). It covers every partition the group
@@ -96,7 +233,9 @@ being silently omitted. Rules:
   returned are still listed and a warning is logged. If all brokers fail,
   the call fails.
 
-**Consumer health.** `analyze_consumer_health` is a pure domain function
+### Consumer health
+
+`analyze_consumer_health` is a pure domain function
 (`domain/diagnostics/consumer_health.py`) applied to the group description
 and its lag. Each rule produces a `Finding`: a stable `code`, a `severity`,
 a summary, and the `evidence` behind it. Possible explanations are worded as
@@ -121,7 +260,9 @@ snapshot, and the thresholds (`STREAMSAGE_LAG_*_THRESHOLD`, per partition, in
 messages) are configured values, not derived from the consumer's throughput.
 The analysis never states that a consumer is stuck or names a root cause.
 
-**Findings.** Every diagnostic produces `Finding`s
+### Findings
+
+Every diagnostic produces `Finding`s
 (`domain/diagnostics/finding.py`) with:
 
 - `code`: stable identifier (the full list is in `diagnostics/catalog.py`);
@@ -135,13 +276,17 @@ Summaries never contain hypotheses, and no finding asserts a root cause.
 Insufficient data is reported explicitly, through findings whose summary
 starts with "Insufficient data" and a `unknown` status, never as `healthy`.
 
-**Configurable severity.** `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` (JSON)
+### Configurable severity
+
+`STREAMSAGE_FINDING_SEVERITY_OVERRIDES` (JSON)
 maps finding codes to severities, for example to treat inactive groups as
 `info` or not-advancing partitions as `critical`. The overall status is
 computed after overrides. Unknown codes and invalid values are rejected at
 startup, so a typo cannot silently disable an override.
 
-**Stalled partitions (`detect_stalled_partitions`).** The spec's rule is that
+### Stalled partitions (`detect_stalled_partitions`)
+
+The spec's rule is that
 absence of progress can only be detected by comparing offsets at more than
 one point in time. The MVP has no persistence and no background monitoring,
 so the tool takes both samples **within a single call**: it reads the
@@ -169,7 +314,9 @@ would add state and lifecycle questions. Background sampling is out of
 scope for the MVP. Both remain possible later without changing the domain
 function, which only compares two samples.
 
-**Message inspection.** `inspect_messages` follows the same layering as the
+### Message inspection
+
+`inspect_messages` follows the same layering as the
 rest of the server:
 
 - `MessageReader` port: `partition_offsets()` (the topic is checked with
@@ -185,7 +332,9 @@ rest of the server:
   timeout), and closes the consumer. A timeout yields a partial result
   marked `complete: false`.
 
-**Key search.** Kafka has no index by key, so `find_messages_by_key` scans
+### Key search
+
+Kafka has no index by key, so `find_messages_by_key` scans
 the newest messages of each partition. The total budget is split evenly
 across the selected partitions and capped per partition
 (`plan_key_scan`). The response reports each partition's scanned range and
@@ -195,7 +344,9 @@ completed. A "no match" with partial coverage is reported as exactly that,
 not as "the key does not exist". The adapter keeps only the newest N
 matches per partition while scanning.
 
-**DLQ topics.** There is no universal DLQ naming convention. A topic is a DLQ
+### DLQ topics
+
+There is no universal DLQ naming convention. A topic is a DLQ
 only if it matches `STREAMSAGE_DLQ_TOPICS` (exact names or glob patterns,
 case-sensitive). Without that setting, `list_dlq_topics` says so explicitly
 instead of guessing. Message counts are upper bounds from offsets: compaction
@@ -205,7 +356,9 @@ error headers, use `inspect_messages`.
 See [security.md](security.md#data-protection) for the privacy rules and
 their limits.
 
-**HTTP transport and authorization.** Static bearer tokens did not fit
+### HTTP transport and authorization
+
+Static bearer tokens did not fit
 the SDK's built-in auth, which is an OAuth resource server that requires an
 authorization server (`issuer_url`) and would advertise OAuth metadata
 StreamSage cannot honor. Instead, two layers wrap the SDK's Streamable HTTP
@@ -227,7 +380,9 @@ Over stdio, `ctx.request` is `None` and nothing is restricted. With protocol
 filtering handles both shapes; an end-to-end test over real HTTP guards
 this.
 
-**Metrics.** `ServerMetrics` (`shared/metrics.py`) owns a dedicated
+### Metrics
+
+`ServerMetrics` (`shared/metrics.py`) owns a dedicated
 Prometheus registry, created by the composition root rather than held as
 process-global state. Four places record into it:
 
@@ -240,21 +395,29 @@ process-global state. Four places record into it:
 Labels only take values defined in code. `/metrics` is served in HTTP mode
 only; over stdio there is no listener to scrape.
 
-**Controller id in KRaft.** In KRaft mode, the Metadata response's
+### Controller id in KRaft
+
+In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The
 field is documented as such in the tool's output schema.
 
-**Missing data is `None`.** When the cluster does not report a value, such as
+### Missing data is `None`
+
+When the cluster does not report a value, such as
 a cluster id, a controller or a partition leader, StreamSage returns `null`.
 It never substitutes a placeholder.
 
-**Response schemas live in presentation.** Use cases return domain entities.
+### Response schemas live in presentation
+
+Use cases return domain entities.
 The MCP layer maps them to Pydantic response models (`presentation/mcp/schemas.py`),
 which define the public wire contract. A separate `application/dto` layer
 would have duplicated these models without adding value in M1, so it was not
 created.
 
-**Error handling.** Infrastructure translates `KafkaException` into the
+### Error handling
+
+Infrastructure translates `KafkaException` into the
 StreamSage hierarchy (`KafkaConnectionError`, `KafkaOperationTimeoutError`,
 `KafkaResourceNotFoundError`, `KafkaMetadataError`, ...), and messages include
 only Kafka error *codes*. `operation_boundary` turns those errors into MCP
@@ -262,11 +425,15 @@ only Kafka error *codes*. `operation_boundary` turns those errors into MCP
 propagates to the SDK, which returns only `Error executing tool <name>`, so
 internals never reach the client.
 
-**Lifecycle.** `build_application` is a context manager. The `AdminClient` is
+### Lifecycle
+
+`build_application` is a context manager. The `AdminClient` is
 created once and closed when the server stops, and there are no global
 singletons.
 
-**Logging.** JSON lines go to stderr, because stdout is reserved for the stdio
+### Logging
+
+JSON lines go to stderr, because stdout is reserved for the stdio
 transport. librdkafka logs are routed through Python logging; they are
 delivered when the client is polled, which happens after every metadata
 request. Each MCP operation logs `operation`, `correlation_id`, `outcome`,

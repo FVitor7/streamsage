@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+- New user guides: getting started (release package vs source checkout),
+  connecting clients (Claude Code, Claude Desktop, MCP Inspector, HTTP),
+  usage with example questions and walkthroughs, a tool reference with real
+  responses from the sample environment, and a full configuration reference.
+- Mermaid diagrams for the architecture, request flows, security and CI.
+- `SECURITY.md` with the vulnerability reporting policy.
+- `PROJECT_SPEC.md` translated to English.
+- Claude Desktop examples split into release and source variants.
+
 ## [1.0.0] - 2026-11-22
 
 First stable release. StreamSage is a read-only MCP server for Apache Kafka:
