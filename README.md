@@ -92,6 +92,9 @@ npx @modelcontextprotocol/inspector --cli uv run --directory "$PWD" streamsage \
   --method tools/call --tool-name describe_topic --tool-arg topic_name=orders.created
 ```
 
+A web UI for the local cluster (kafbat/kafka-ui) runs at http://localhost:8080
+after `docker compose up -d`.
+
 Stop Kafka with `docker compose down` (add `-v` to delete its data volume).
 
 ## Kafka configuration

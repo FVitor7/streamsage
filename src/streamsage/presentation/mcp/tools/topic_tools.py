@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
@@ -39,8 +39,10 @@ def register_topic_tools(
             bool,
             Field(description="Include internal topics such as __consumer_offsets."),
         ] = include_internal_by_default,
+        *,
+        ctx: Context,
     ) -> TopicListResponse:
-        with operation_boundary("list_topics", ToolError):
+        with operation_boundary("list_topics", ToolError, ctx.request_id):
             topics = list_topics_use_case.execute(include_internal=include_internal)
         return TopicListResponse.from_domain(topics, include_internal=include_internal)
 
@@ -65,7 +67,8 @@ def register_topic_tools(
                 pattern=TOPIC_NAME_PATTERN,
             ),
         ],
+        ctx: Context,
     ) -> TopicDetailResponse:
-        with operation_boundary("describe_topic", ToolError):
+        with operation_boundary("describe_topic", ToolError, ctx.request_id):
             topic = describe_topic_use_case.execute(topic_name)
         return TopicDetailResponse.from_domain(topic)

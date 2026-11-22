@@ -88,5 +88,14 @@ created once and closed when the server stops, and there are no global
 singletons.
 
 **Logging.** JSON lines go to stderr, because stdout is reserved for the stdio
-transport. librdkafka logs are routed through Python logging. Each MCP
-operation logs `operation`, `outcome`, `error_type` and `duration_ms`.
+transport. librdkafka logs are routed through Python logging; they are
+delivered when the client is polled, which happens after every metadata
+request. Each MCP operation logs `operation`, `correlation_id`, `outcome`,
+`error_type` and `duration_ms`.
+
+`correlation_id` is the JSON-RPC id of the MCP request, received through the
+SDK's request `Context`. That parameter is not part of the tool's input
+schema. The id is unique only within one client connection, which is enough
+to match a log line to the call that produced it. The SDK does not inject a
+request context into static resources, so `kafka://` resource reads log
+`correlation_id: null`.

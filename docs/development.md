@@ -89,6 +89,8 @@ broker/controller in KRaft mode:
 - Host listener: `localhost:9092`
 - Listener for other containers: `kafka:19092`
 - Data volume: `kafka-data` (removed with `docker compose down -v`)
+- Web UI: [kafbat/kafka-ui](https://github.com/kafbat/kafka-ui) at
+  http://localhost:8080, useful for checking what the MCP tools report
 - `auto.create.topics.enable=true` on purpose, so tests can prove that
   StreamSage never creates topics.
 
