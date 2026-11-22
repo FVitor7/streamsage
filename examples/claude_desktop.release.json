@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "streamsage": {
+      "command": "/absolute/path/to/.local/bin/streamsage",
+      "env": {
+        "STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+        "STREAMSAGE_DLQ_TOPICS": "*.DLQ"
+      }
+    }
+  }
+}

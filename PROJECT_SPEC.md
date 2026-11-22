@@ -1,80 +1,82 @@
-# StreamSage --- Especificação Técnica e Guia de Implementação
+# StreamSage — Technical Specification and Implementation Guide
 
-**Documento:** `PROJECT_SPEC.md`\
-**Versão da especificação:** 1.0\
-**Status:** Aprovado para implementação do M1\
-**Projeto:** `FVitor7/streamsage`\
-**Nome:** StreamSage\
-**Tagline:** AI-powered Kafka Observability & Troubleshooting MCP
-Server\
-**Linguagem principal:** Python 3.12+\
-**Broker inicial:** Apache Kafka\
-**Arquitetura:** Clean Architecture + Hexagonal Architecture (Ports and
+> **About this document.** This is the original specification StreamSage was
+> built from, translated from Portuguese. It is kept as a historical record:
+> statuses such as "next milestone" reflect the time it was written. All five
+> milestones were delivered in [v1.0.0](CHANGELOG.md). Where the
+> implementation deliberately deviated from this text (for example, moving
+> `detect_stalled_partitions` from M2 to M3), the decision and its rationale
+> are recorded in [docs/architecture.md](docs/architecture.md).
+
+**Document:** `PROJECT_SPEC.md`\
+**Specification version:** 1.0\
+**Status:** Approved for M1 implementation\
+**Project:** `FVitor7/streamsage`\
+**Name:** StreamSage\
+**Tagline:** AI-powered Kafka Observability & Troubleshooting MCP Server\
+**Main language:** Python 3.12+\
+**Initial broker:** Apache Kafka\
+**Architecture:** Clean Architecture + Hexagonal Architecture (Ports and
 Adapters)\
-**Modelo de operação inicial:** Read-only\
-**Público-alvo:** Desenvolvedores backend, platform engineers e SREs que
-utilizam Kafka e clientes compatíveis com MCP.
+**Initial operating model:** Read-only\
+**Target audience:** Backend developers, platform engineers and SREs who use
+Kafka and MCP-compatible clients.
 
 ------------------------------------------------------------------------
 
-# 1. Instruções para Claude Code
+# 1. Instructions for Claude Code
 
-Este documento é a fonte de verdade para implementar o StreamSage. Antes
-de alterar ou criar arquivos:
+This document is the source of truth for implementing StreamSage. Before
+changing or creating files:
 
-1.  Leia este documento integralmente.
-2.  Inspecione o estado atual do repositório antes de sobrescrever
-    arquivos.
-3.  Siga as decisões arquiteturais e os limites de escopo definidos
-    aqui.
-4.  Implemente em milestones pequenos e verificáveis.
-5.  Não invente APIs do SDK MCP. Consulte a documentação oficial e
-    valide a API da versão efetivamente instalada.
-6.  Não introduza dependências, abstrações ou funcionalidades fora do
-    escopo sem explicar a necessidade e propor a alteração.
-7.  Não implemente operações de escrita no Kafka.
-8.  Não coloque credenciais, dados sensíveis ou arquivos `.env` no Git.
-9.  Crie testes para cada comportamento relevante.
-10. Ao concluir cada milestone, informe arquivos criados/alterados,
-    comandos executados, resultados dos testes, limitações e próximos
-    passos.
+1.  Read this document in full.
+2.  Inspect the current state of the repository before overwriting files.
+3.  Follow the architectural decisions and scope limits defined here.
+4.  Implement in small, verifiable milestones.
+5.  Do not invent MCP SDK APIs. Consult the official documentation and
+    validate the API of the version actually installed.
+6.  Do not introduce dependencies, abstractions or features outside the
+    scope without explaining the need and proposing the change.
+7.  Do not implement write operations on Kafka.
+8.  Do not put credentials, sensitive data or `.env` files in Git.
+9.  Write tests for every relevant behavior.
+10. When finishing each milestone, report the files created/changed,
+    commands run, test results, limitations and next steps.
 
-## Diretriz de implementação
+## Implementation guideline
 
-A prioridade é entregar uma aplicação pequena, funcional, bem testada e
-arquiteturalmente correta. Evite overengineering. A arquitetura deve
-permitir evolução, mas não criar camadas vazias ou abstrações sem uso
-real.
+The priority is to deliver a small, functional, well-tested and
+architecturally correct application. Avoid overengineering. The
+architecture must allow evolution, but must not create empty layers or
+abstractions without real use.
 
-Quando houver conflito entre um exemplo de código deste documento e a
-API oficial atual de uma dependência, prevalecem a documentação oficial
-e os contratos arquiteturais deste documento. Atualize o código e
-registre a decisão.
+When an example in this document conflicts with the current official API
+of a dependency, the official documentation and the architectural contracts
+of this document prevail. Update the code and record the decision.
 
 ------------------------------------------------------------------------
 
-# 2. Visão do produto
+# 2. Product vision
 
-O StreamSage é um servidor MCP open source em Python que permite que
-agentes de IA e outros clientes compatíveis com MCP explorem clusters
-Apache Kafka, consultem metadados e investiguem problemas operacionais.
+StreamSage is an open-source MCP server in Python that lets AI agents and
+other MCP-compatible clients explore Apache Kafka clusters, query metadata
+and investigate operational problems.
 
-O objetivo não é apenas expor chamadas do Kafka como ferramentas MCP. O
-produto deve oferecer uma camada de aplicação e, nas próximas fases,
-diagnósticos determinísticos baseados em evidências.
+The goal is not only to expose Kafka calls as MCP tools. The product must
+offer an application layer and, in later phases, deterministic,
+evidence-based diagnostics.
 
-## 2.1 Problema
+## 2.1 Problem
 
-Informações importantes para operar Kafka estão distribuídas entre
-tópicos, partições, brokers, consumer groups, offsets, configurações e
-ferramentas de linha de comando. Investigações exigem várias consultas e
-conhecimento operacional.
+Information that matters for operating Kafka is spread across topics,
+partitions, brokers, consumer groups, offsets, configurations and
+command-line tools. Investigations require several queries and operational
+knowledge.
 
-O StreamSage deve oferecer uma interface consistente para essas
-consultas, permitindo que um agente coordene as ferramentas e apresente
-conclusões fundamentadas.
+StreamSage must offer a consistent interface for those queries, letting an
+agent coordinate the tools and present well-founded conclusions.
 
-## 2.2 Exemplos de perguntas que o produto deverá suportar
+## 2.2 Example questions the product should support
 
 -   What topics are available in this cluster?
 -   Which consumer groups have the highest lag?
@@ -83,155 +85,122 @@ conclusões fundamentadas.
 -   What is the current metadata health of my Kafka cluster?
 -   Can you investigate the `orders.created` topic?
 
-## 2.3 Princípios do produto
+## 2.3 Product principles
 
 -   Read-only by design.
 -   Evidence-based diagnostics.
--   Broker-specific code isolado em adapters.
--   Domínio independente de MCP e Kafka.
--   Contratos tipados e validação de entradas.
--   Timeouts explícitos e erros controlados.
--   Segurança por menor privilégio.
--   Testes unitários sem broker e testes de integração com Kafka real.
--   Documentação e exemplos reproduzíveis.
+-   Broker-specific code isolated in adapters.
+-   Domain independent of MCP and Kafka.
+-   Typed contracts and input validation.
+-   Explicit timeouts and controlled errors.
+-   Security through least privilege.
+-   Unit tests without a broker and integration tests with a real Kafka.
+-   Reproducible documentation and examples.
 
 ------------------------------------------------------------------------
 
-# 3. Escopo e decisões aprovadas
+# 3. Scope and approved decisions
 
-Estas decisões foram tomadas e devem ser respeitadas no MVP.
+These decisions have been made and must be respected in the MVP.
 
-  -----------------------------------------------------------------------
-  Tema                                Decisão
-  ----------------------------------- -----------------------------------
-  Nome                                StreamSage
+| Topic | Decision |
+| --- | --- |
+| Name | StreamSage |
+| Repository | `FVitor7/streamsage` |
+| Language | Python |
+| Minimum version | Python 3.12 |
+| Initial broker | Apache Kafka |
+| Redpanda | Out of initial scope |
+| Amazon MSK | Out of initial scope; may be supported through a Kafka-compatible configuration in the future |
+| Protocol | MCP |
+| SDK | Official MCP SDK for Python |
+| Initial transport | stdio |
+| Streamable HTTP | Future evolution |
+| Architecture | Clean Architecture + Ports and Adapters |
+| Kafka client | `confluent-kafka` |
+| Configuration | Pydantic Settings + environment variables |
+| Dependency manager | uv |
+| Tests | pytest |
+| Quality | Ruff, mypy, pytest-cov, GitHub Actions |
+| Local environment | Docker Compose + Kafka in KRaft mode |
+| Internal persistence | None in the MVP |
+| Own LLM | No |
+| LangChain/LangGraph | No |
+| Kafka operations | Read-only |
+| Documentation | English in the public repository |
+| Proposed license | MIT |
 
-  Repositório                         `FVitor7/streamsage`
+## 3.1 Out of MVP scope
 
-  Linguagem                           Python
+-   Own web interface.
+-   Internal database.
+-   Writing/publishing messages.
+-   Creating or deleting topics.
+-   Changing offsets.
+-   Changing cluster configuration.
+-   Direct integration with OpenAI, Gemini, Anthropic or another LLM.
+-   Continuous background monitoring.
+-   Alerting system.
+-   Specific adapters for Redpanda or other brokers.
+-   LLM-based diagnostics inside the server.
 
-  Versão mínima                       Python 3.12
-
-  Broker inicial                      Apache Kafka
-
-  Redpanda                            Fora do escopo inicial
-
-  Amazon MSK                          Fora do escopo inicial; poderá ser
-                                      suportado via configuração Kafka
-                                      compatível no futuro
-
-  Protocolo                           MCP
-
-  SDK                                 SDK oficial MCP para Python
-
-  Transporte inicial                  stdio
-
-  Streamable HTTP                     Evolução futura
-
-  Arquitetura                         Clean Architecture + Ports and
-                                      Adapters
-
-  Cliente Kafka                       `confluent-kafka`
-
-  Configuração                        Pydantic Settings + variáveis de
-                                      ambiente
-
-  Gerenciador de dependências         uv
-
-  Testes                              pytest
-
-  Qualidade                           Ruff, mypy, pytest-cov, GitHub
-                                      Actions
-
-  Ambiente local                      Docker Compose + Kafka em modo
-                                      KRaft
-
-  Persistência interna                Nenhuma no MVP
-
-  LLM próprio                         Não
-
-  LangChain/LangGraph                 Não
-
-  Operações Kafka                     Somente leitura
-
-  Documentação                        Inglês no repositório público
-
-  Licença proposta                    MIT
-  -----------------------------------------------------------------------
-
-## 3.1 Fora do escopo do MVP
-
--   Interface web própria.
--   Banco de dados interno.
--   Escrita/publicação de mensagens.
--   Criação ou exclusão de tópicos.
--   Alteração de offsets.
--   Alteração de configurações do cluster.
--   Integração direta com OpenAI, Gemini, Anthropic ou outro LLM.
--   Monitoramento contínuo em background.
--   Sistema de alertas.
--   Adaptadores específicos para Redpanda ou outros brokers.
--   Diagnóstico baseado em LLM dentro do servidor.
-
-O cliente MCP/LLM é responsável por interpretar e combinar os
-resultados. O servidor fornece dados e diagnósticos determinísticos.
+The MCP client/LLM is responsible for interpreting and combining the
+results. The server provides data and deterministic diagnostics.
 
 ------------------------------------------------------------------------
 
-# 4. Arquitetura
+# 4. Architecture
 
-Adotar Clean Architecture combinada com Hexagonal Architecture (Ports
-and Adapters).
+Adopt Clean Architecture combined with Hexagonal Architecture (Ports and
+Adapters).
 
-## 4.1 Camadas
+## 4.1 Layers
 
 ### Presentation
 
-Responsável pelo protocolo MCP e pela exposição de:
+Responsible for the MCP protocol and for exposing:
 
 -   Tools.
 -   Resources.
 -   Prompts.
 
-Não deve conter regras de negócio nem acessar diretamente o cliente
-Kafka.
+It must not contain business rules or access the Kafka client directly.
 
 ### Application
 
-Responsável por:
+Responsible for:
 
 -   Use cases.
--   Orquestração.
--   DTOs de aplicação.
--   Dependências por meio de Ports.
+-   Orchestration.
+-   Application DTOs.
+-   Dependencies through Ports.
 
-Os casos de uso não devem importar classes de infraestrutura ou do SDK
-MCP.
+Use cases must not import infrastructure classes or the MCP SDK.
 
 ### Domain
 
-Responsável por:
+Responsible for:
 
--   Entidades.
+-   Entities.
 -   Value Objects.
--   Regras de negócio.
--   Diagnósticos e severidades.
--   Exceções de domínio.
+-   Business rules.
+-   Diagnostics and severities.
+-   Domain exceptions.
 
-O domínio não pode depender de Kafka, MCP, Pydantic ou bibliotecas de
-infraestrutura.
+The domain cannot depend on Kafka, MCP, Pydantic or infrastructure
+libraries.
 
 ### Infrastructure
 
-Responsável por:
+Responsible for:
 
--   Implementações dos Ports.
--   Cliente Kafka.
--   Configuração.
--   Integrações externas.
--   Conversão dos modelos externos para modelos de domínio.
+-   Port implementations.
+-   Kafka client.
+-   Configuration.
+-   External integrations.
+-   Converting external models into domain models.
 
-## 4.2 Diagrama lógico
+## 4.2 Logical diagram
 
 ``` text
 AI Clients
@@ -263,35 +232,34 @@ Application
                   Apache Kafka
 ```
 
-## 4.3 Regra de dependência
+## 4.3 Dependency rule
 
-As dependências devem apontar para dentro:
+Dependencies must point inward:
 
--   Presentation depende de Application.
--   Application depende de Domain e declara Ports.
--   Infrastructure implementa Ports e depende de Application/Domain.
--   Domain não depende de nenhuma camada externa.
+-   Presentation depends on Application.
+-   Application depends on Domain and declares Ports.
+-   Infrastructure implements Ports and depends on Application/Domain.
+-   Domain depends on no outer layer.
 
-O Composition Root (`main.py` ou módulo equivalente) é o ponto que
-instancia as implementações concretas e injeta as dependências.
+The Composition Root (`main.py` or an equivalent module) is the place that
+instantiates the concrete implementations and injects the dependencies.
 
-## 4.4 Decisão sobre síncrono e assíncrono
+## 4.4 Sync versus async decision
 
-O cliente `confluent-kafka` e suas operações administrativas são
-síncronos. No M1, manter as operações Kafka síncronas e configurar
-timeouts explícitos.
+The `confluent-kafka` client and its administrative operations are
+synchronous. In M1, keep the Kafka operations synchronous and configure
+explicit timeouts.
 
-Não adicionar `asyncio.to_thread`, filas ou complexidade de concorrência
-sem uma necessidade demonstrada. Se a API MCP exigir handlers
-assíncronos, adaptar a fronteira de apresentação sem contaminar o
-domínio e a aplicação.
+Do not add `asyncio.to_thread`, queues or concurrency complexity without a
+demonstrated need. If the MCP API requires asynchronous handlers, adapt the
+presentation boundary without contaminating the domain and application.
 
 ------------------------------------------------------------------------
 
-# 5. Estrutura de diretórios
+# 5. Directory structure
 
-Estrutura-alvo. Criar apenas os módulos necessários em cada milestone;
-não criar arquivos vazios apenas para reproduzir a árvore.
+Target structure. Create only the modules needed in each milestone; do not
+create empty files just to reproduce the tree.
 
 ``` text
 streamsage/
@@ -383,15 +351,14 @@ streamsage/
 
 ------------------------------------------------------------------------
 
-# 6. Modelos de domínio
+# 6. Domain models
 
-Os modelos de domínio devem ser Python puro, preferencialmente
-`dataclasses` imutáveis quando apropriado. Não utilizar modelos Pydantic
-como entidades de domínio.
+Domain models must be pure Python, preferably immutable `dataclasses` where
+appropriate. Do not use Pydantic models as domain entities.
 
-Exemplos conceituais:
+Conceptual examples:
 
-## 6.1 Cluster e Broker
+## 6.1 Cluster and Broker
 
 ``` python
 from dataclasses import dataclass
@@ -411,7 +378,7 @@ class Cluster:
     controller_id: int | None
 ```
 
-## 6.2 Topic e Partition
+## 6.2 Topic and Partition
 
 ``` python
 from dataclasses import dataclass
@@ -447,15 +414,15 @@ class PartitionLag:
     lag: int | None
 ```
 
-**Regra importante:** ausência de committed offset ou de informação
-necessária para calcular lag deve ser representada como `None`, nunca
-convertida silenciosamente para zero.
+**Important rule:** a missing committed offset, or missing information
+needed to compute lag, must be represented as `None`, never silently
+converted to zero.
 
 ------------------------------------------------------------------------
 
 # 7. Application Ports
 
-Usar `typing.Protocol` para definir contratos estruturais.
+Use `typing.Protocol` to define structural contracts.
 
 ## 7.1 ClusterReader
 
@@ -510,16 +477,16 @@ class ConsumerGroupReader(Protocol):
         ...
 ```
 
-Criar `ConsumerGroup` e os demais modelos quando o M2 for iniciado. Não
-é necessário implementar todo o contrato no M1.
+Create `ConsumerGroup` and the other models when M2 starts. Implementing the
+whole contract in M1 is not required.
 
 ------------------------------------------------------------------------
 
 # 8. Application Use Cases
 
-Use cases devem ser pequenos, explícitos e testáveis com mocks/fakes.
+Use cases must be small, explicit and testable with mocks/fakes.
 
-Exemplo:
+Example:
 
 ``` python
 from streamsage.application.ports.topic_reader import TopicReader
@@ -534,7 +501,7 @@ class ListTopicsUseCase:
         return self._topic_reader.list_topics()
 ```
 
-Outro exemplo:
+Another example:
 
 ``` python
 from streamsage.application.ports.cluster_reader import ClusterReader
@@ -549,33 +516,33 @@ class GetClusterInfoUseCase:
         return self._cluster_reader.get_cluster_info()
 ```
 
-Use cases não devem importar `confluent_kafka`, SDK MCP ou classes de
-configuração.
+Use cases must not import `confluent_kafka`, the MCP SDK or configuration
+classes.
 
 ------------------------------------------------------------------------
 
-# 9. Infraestrutura Kafka
+# 9. Kafka infrastructure
 
-## 9.1 Biblioteca
+## 9.1 Library
 
-Utilizar `confluent-kafka` (Python client baseado em librdkafka).
+Use `confluent-kafka` (Python client based on librdkafka).
 
-O adapter deve encapsular as particularidades da biblioteca e converter
-resultados externos em modelos do domínio.
+The adapter must encapsulate the library's particularities and convert
+external results into domain models.
 
 ## 9.2 AdminClient Factory
 
-Responsabilidades:
+Responsibilities:
 
--   Criar o AdminClient.
--   Receber Settings por injeção.
--   Configurar bootstrap servers.
--   Configurar timeouts.
--   Configurar segurança SASL/TLS quando aplicável.
--   Evitar expor segredos em logs ou erros.
--   Não espalhar criação de clientes pela aplicação.
+-   Create the AdminClient.
+-   Receive Settings by injection.
+-   Configure bootstrap servers.
+-   Configure timeouts.
+-   Configure SASL/TLS security when applicable.
+-   Avoid exposing secrets in logs or errors.
+-   Not spread client creation across the application.
 
-Exemplo conceitual:
+Conceptual example:
 
 ``` python
 from confluent_kafka.admin import AdminClient
@@ -599,45 +566,43 @@ class KafkaAdminClientFactory:
             "allow.auto.create.topics": False,
         }
 
-        # Adicionar configuração SASL/TLS somente quando necessária.
-        # Nunca registrar username/password ou material de certificado.
+        # Add SASL/TLS configuration only when needed.
+        # Never log username/password or certificate material.
 
         return AdminClient(config)
 ```
 
-Verificar os nomes e unidades das configurações suportadas pela versão
-efetivamente instalada do `confluent-kafka`. Não assumir que todos os
-campos do exemplo são válidos em qualquer versão.
+Check the names and units of the configuration properties supported by the
+`confluent-kafka` version actually installed. Do not assume every field in
+the example is valid in every version.
 
 ## 9.3 Kafka Adapters
 
-Implementar:
+Implement:
 
--   `KafkaClusterAdapter` --- implementa `ClusterReader`.
--   `KafkaTopicAdapter` --- implementa `TopicReader`.
--   `KafkaConsumerGroupAdapter` --- implementa `ConsumerGroupReader`, no
-    M2.
+-   `KafkaClusterAdapter` — implements `ClusterReader`.
+-   `KafkaTopicAdapter` — implements `TopicReader`.
+-   `KafkaConsumerGroupAdapter` — implements `ConsumerGroupReader`, in M2.
 
-Adapters devem:
+Adapters must:
 
--   Converter modelos Kafka em modelos de domínio.
--   Normalizar erros de biblioteca em exceções da aplicação/domínio.
--   Definir timeouts.
--   Tratar metadados incompletos.
--   Evitar operações de escrita.
--   Não retornar objetos internos da biblioteca Kafka para as camadas
-    superiores.
+-   Convert Kafka models into domain models.
+-   Normalize library errors into application/domain exceptions.
+-   Define timeouts.
+-   Handle incomplete metadata.
+-   Avoid write operations.
+-   Not return internal Kafka library objects to the upper layers.
 
-### Cuidado com criação acidental de tópicos
+### Beware of accidental topic creation
 
-Não usar consultas direcionadas a um nome de tópico inexistente como
-mecanismo de validação sem compreender a semântica e a configuração do
-broker. Em alguns cenários/configurações, consultas Kafka podem
-interagir com auto-creation.
+Do not use queries targeted at a non-existent topic name as a validation
+mechanism without understanding the broker's semantics and configuration.
+In some scenarios/configurations, Kafka queries can interact with
+auto-creation.
 
-Para `describe_topic`, preferir consultar metadados conhecidos e validar
-a existência sem provocar criação. Testar esse comportamento com o
-broker local e documentar a garantia.
+For `describe_topic`, prefer querying known metadata and validating
+existence without triggering creation. Test this behavior with the local
+broker and document the guarantee.
 
 ------------------------------------------------------------------------
 
@@ -645,91 +610,73 @@ broker local e documentar a garantia.
 
 ## 10.1 SDK
 
-Utilizar o SDK oficial MCP para Python. Antes de implementar:
+Use the official MCP SDK for Python. Before implementing:
 
--   Consultar a documentação oficial atual.
--   Confirmar a versão estável disponível.
--   Confirmar a API de criação do servidor, registro de
-    tools/resources/prompts e execução stdio.
--   Fixar uma faixa de versão compatível no `pyproject.toml` e registrar
-    a resolução exata no `uv.lock`.
--   Não copiar exemplos de versões antigas sem validação.
+-   Consult the current official documentation.
+-   Confirm the available stable version.
+-   Confirm the API for creating the server, registering
+    tools/resources/prompts and running stdio.
+-   Pin a compatible version range in `pyproject.toml` and record the exact
+    resolution in `uv.lock`.
+-   Do not copy examples from old versions without validation.
 
-O MCP deve ser uma camada fina: receber parâmetros, validar entradas,
-chamar use cases e serializar resultados.
+MCP must be a thin layer: receive parameters, validate inputs, call use
+cases and serialize results.
 
-## 10.2 Tools do M1
+## 10.2 M1 Tools
 
-  ----------------------------------------------------------------------------------
-  Tool                    Entrada                            Resultado
-  ----------------------- ---------------------------------- -----------------------
-  `get_cluster_info`      Nenhuma                            ID, brokers e
-                                                             controller quando
-                                                             disponível
+| Tool | Input | Result |
+| --- | --- | --- |
+| `get_cluster_info` | None | ID, brokers and controller when available |
+| `list_topics` | `include_internal: bool = false` | List of topics |
+| `describe_topic` | `topic_name: str` | Partitions, leader, replicas and ISR |
 
-  `list_topics`           `include_internal: bool = false`   Lista de tópicos
+All tools must have clear descriptions, typed parameters and structured
+responses.
 
-  `describe_topic`        `topic_name: str`                  Partições, leader,
-                                                             replicas e ISR
-  ----------------------------------------------------------------------------------
+## 10.3 Tools planned for M2
 
-Todas as ferramentas devem ter descrições claras, parâmetros tipados e
-respostas estruturadas.
+| Tool | Input | Result |
+| --- | --- | --- |
+| `list_consumer_groups` | Optional filters | Consumer groups |
+| `describe_consumer_group` | `group_id` | State and members |
+| `get_consumer_lag` | `group_id` | Lag per topic/partition |
+| `analyze_consumer_health` | `group_id` | Evidence-based classification |
+| `detect_stalled_partitions` | `group_id` | Partitions without progress, if there are enough snapshots |
 
-## 10.3 Tools planejadas para M2
-
-  -----------------------------------------------------------------------------
-  Tool                          Entrada                 Resultado
-  ----------------------------- ----------------------- -----------------------
-  `list_consumer_groups`        Filtros opcionais       Consumer groups
-
-  `describe_consumer_group`     `group_id`              Estado e membros
-
-  `get_consumer_lag`            `group_id`              Lag por tópico/partição
-
-  `analyze_consumer_health`     `group_id`              Classificação baseada
-                                                        em evidências
-
-  `detect_stalled_partitions`   `group_id`              Partições sem
-                                                        progresso, se houver
-                                                        snapshots suficientes
-  -----------------------------------------------------------------------------
-
-## 10.4 Resources do M1
+## 10.4 M1 Resources
 
 -   `kafka://cluster/info`
 -   `kafka://topics`
 
-Resources devem fornecer dados consultáveis e não duplicar
-desnecessariamente as regras das tools. Reutilizar use cases/serviços de
-aplicação.
+Resources must provide queryable data and must not unnecessarily duplicate
+the rules of the tools. Reuse use cases/application services.
 
-## 10.5 Prompt do M1
+## 10.5 M1 Prompt
 
 `investigate_kafka_cluster`
 
-O prompt orienta o cliente a:
+The prompt guides the client to:
 
-1.  Consultar metadados do cluster.
-2.  Listar tópicos.
-3.  Investigar detalhes relevantes.
-4.  Distinguir dados observados de hipóteses.
-5.  Não afirmar saúde completa do cluster com base apenas em metadados
-    limitados.
+1.  Query cluster metadata.
+2.  List topics.
+3.  Investigate relevant details.
+4.  Distinguish observed data from hypotheses.
+5.  Not claim complete cluster health based only on limited metadata.
 
-## 10.6 Transporte
+## 10.6 Transport
 
 M1: stdio.
 
-Evolução futura: Streamable HTTP.
+Future evolution: Streamable HTTP.
 
-Não implementar HTTP no M1.
+Do not implement HTTP in M1.
 
 ------------------------------------------------------------------------
 
-# 11. Configuração
+# 11. Configuration
 
-Utilizar Pydantic Settings e variáveis de ambiente.
+Use Pydantic Settings and environment variables.
 
 `.env.example`:
 
@@ -748,7 +695,7 @@ STREAMSAGE_LOG_LEVEL=INFO
 STREAMSAGE_INCLUDE_INTERNAL_TOPICS=false
 ```
 
-Modelo inicial:
+Initial model:
 
 ``` python
 from pydantic import SecretStr
@@ -776,108 +723,107 @@ class Settings(BaseSettings):
     include_internal_topics: bool = False
 ```
 
-Requisitos:
+Requirements:
 
--   Validar configurações inconsistentes.
--   Não registrar segredos.
--   Suportar PLAINTEXT apenas para desenvolvimento local.
--   Documentar configuração SASL/TLS.
--   Nunca versionar `.env`.
--   Usar `SecretStr` para segredos.
--   Não permitir que o cliente MCP forneça credenciais arbitrárias em
-    cada tool call.
+-   Validate inconsistent configurations.
+-   Do not log secrets.
+-   Support PLAINTEXT for local development only.
+-   Document SASL/TLS configuration.
+-   Never version `.env`.
+-   Use `SecretStr` for secrets.
+-   Do not allow the MCP client to supply arbitrary credentials in each tool
+    call.
 
 ------------------------------------------------------------------------
 
-# 12. Segurança
+# 12. Security
 
 ## 12.1 Read-only by design
 
-Permitido:
+Allowed:
 
--   Consultar metadados do cluster.
--   Listar e descrever tópicos.
--   Consultar consumer groups.
--   Consultar offsets e lag.
--   Inspecionar mensagens em escopo limitado em milestone futuro.
+-   Query cluster metadata.
+-   List and describe topics.
+-   Query consumer groups.
+-   Query offsets and lag.
+-   Inspect messages within a limited scope in a future milestone.
 
-Proibido no MVP:
+Forbidden in the MVP:
 
--   Criar ou excluir tópicos.
--   Publicar mensagens.
--   Alterar offsets.
--   Alterar configurações do cluster.
--   Executar operações administrativas de escrita.
+-   Creating or deleting topics.
+-   Publishing messages.
+-   Changing offsets.
+-   Changing cluster configuration.
+-   Running write administrative operations.
 
-A política read-only deve ser aplicada tanto no código quanto nas
-ACLs/credenciais do Kafka.
+The read-only policy must be enforced both in code and in Kafka
+ACLs/credentials.
 
-## 12.2 Princípio do menor privilégio
+## 12.2 Principle of least privilege
 
-A credencial Kafka deve possuir somente as permissões necessárias às
-consultas disponibilizadas. Não confiar apenas na ausência de métodos de
-escrita no código.
+The Kafka credential must have only the permissions needed for the queries
+made available. Do not rely only on the absence of write methods in the
+code.
 
-## 12.3 Proteção de dados
+## 12.3 Data protection
 
--   Não registrar payloads de mensagens por padrão.
--   Não registrar senhas, tokens ou certificados.
--   Limitar quantidade e tamanho de mensagens inspecionadas.
--   Sanitizar informações sensíveis.
--   Definir timeouts e limites para consultas.
--   Não retornar stack traces internos aos clientes MCP.
--   Não expor configurações secretas em Resources.
+-   Do not log message payloads by default.
+-   Do not log passwords, tokens or certificates.
+-   Limit the number and size of inspected messages.
+-   Sanitize sensitive information.
+-   Define timeouts and limits for queries.
+-   Do not return internal stack traces to MCP clients.
+-   Do not expose secret configuration in Resources.
 
 ## 12.4 MCP
 
--   Validar todos os argumentos das tools.
--   Não permitir que entradas controlem comandos de shell.
--   Não aceitar caminhos arbitrários de arquivos.
--   Documentar claramente o transporte e as considerações de confiança.
--   Se Streamable HTTP for implementado, adicionar autenticação e
-    controles de acesso antes de disponibilizá-lo fora de ambiente
-    local.
+-   Validate all tool arguments.
+-   Do not allow inputs to control shell commands.
+-   Do not accept arbitrary file paths.
+-   Clearly document the transport and trust considerations.
+-   If Streamable HTTP is implemented, add authentication and access
+    controls before making it available outside a local environment.
 
 ------------------------------------------------------------------------
 
-# 13. Dependências
+# 13. Dependencies
 
-Utilizar `uv` para gerenciamento e lockfile.
+Use `uv` for management and the lockfile.
 
-## 13.1 Produção
+## 13.1 Production
 
--   `mcp[cli]` --- SDK oficial MCP e CLI, conforme a
-    distribuição/documentação atual.
--   `confluent-kafka` --- cliente Kafka.
--   `pydantic` --- validação e modelos de fronteira.
--   `pydantic-settings` --- configuração.
+-   `mcp[cli]` — official MCP SDK and CLI, according to the current
+    distribution/documentation.
+-   `confluent-kafka` — Kafka client.
+-   `pydantic` — validation and boundary models.
+-   `pydantic-settings` — configuration.
 
-## 13.2 Desenvolvimento
+## 13.2 Development
 
 -   `pytest`
 -   `pytest-cov`
--   `pytest-asyncio` --- somente onde houver código assíncrono que
-    precise de testes.
+-   `pytest-asyncio` — only where there is asynchronous code that needs
+    tests.
 -   `ruff`
 -   `mypy`
 -   `pre-commit`
--   `testcontainers` --- opcional para testes de integração; avaliar se
-    Docker Compose é mais simples para o CI.
+-   `testcontainers` — optional for integration tests; evaluate whether
+    Docker Compose is simpler for CI.
 
-## 13.3 Não adicionar no MVP
+## 13.3 Do not add in the MVP
 
 -   LangChain.
 -   LangGraph.
--   SDKs de provedores de LLM.
--   Banco de dados.
--   Framework web adicional.
--   Sistema de filas próprio.
+-   LLM provider SDKs.
+-   Database.
+-   Additional web framework.
+-   Own queue system.
 
-## 13.4 pyproject.toml inicial
+## 13.4 Initial pyproject.toml
 
-As faixas abaixo são propostas iniciais. Validar a disponibilidade e
-compatibilidade das versões no momento da implementação. Não assumir que
-uma versão futura ou preview é estável.
+The ranges below are initial proposals. Validate the availability and
+compatibility of the versions at implementation time. Do not assume a
+future or preview version is stable.
 
 ``` toml
 [project]
@@ -940,35 +886,35 @@ show_missing = true
 fail_under = 80
 ```
 
-Observação: a faixa do pacote MCP deve ser ajustada após verificar a
-versão estável e sua API oficial. Se o pacote oficial não tiver a faixa
-proposta, corrigir para a faixa real e registrar a decisão. Não forçar
-uma versão inexistente.
+Note: the MCP package range must be adjusted after checking the stable
+version and its official API. If the official package does not have the
+proposed range, correct it to the real range and record the decision. Do
+not force a version that does not exist.
 
 ------------------------------------------------------------------------
 
-# 14. Ambiente local Kafka
+# 14. Local Kafka environment
 
-Utilizar Apache Kafka em modo KRaft, sem ZooKeeper.
+Use Apache Kafka in KRaft mode, without ZooKeeper.
 
 M1:
 
--   Um broker.
--   Porta externa `9092`.
--   Endereço interno apropriado para containers.
+-   One broker.
+-   External port `9092`.
+-   Appropriate internal address for containers.
 -   Healthcheck.
--   Volume persistente.
--   Configuração reproduzível via Docker Compose.
+-   Persistent volume.
+-   Reproducible configuration via Docker Compose.
 
-M1 não precisa simular alta disponibilidade. Em milestone futuro, criar
-ambiente com três brokers para testar replicação, ISR e distribuição de
-partições.
+M1 does not need to simulate high availability. In a future milestone,
+create an environment with three brokers to test replication, ISR and
+partition distribution.
 
-O `docker-compose.yml` deve usar uma imagem oficial/confiável do Kafka,
-tag explícita e configuração KRaft documentada. Evitar `latest` para
-builds reproduzíveis.
+`docker-compose.yml` must use an official/trusted Kafka image, an explicit
+tag and a documented KRaft configuration. Avoid `latest` for reproducible
+builds.
 
-Comandos esperados:
+Expected commands:
 
 ``` bash
 docker compose up -d
@@ -977,17 +923,17 @@ docker compose logs -f kafka
 docker compose down
 ```
 
-O teste de integração deve aguardar o broker ficar saudável antes de
-executar consultas.
+The integration test must wait for the broker to become healthy before
+running queries.
 
 ------------------------------------------------------------------------
 
 # 15. Composition Root
 
-O ponto de composição instancia Settings, factories, adapters, use cases
-e servidor MCP.
+The composition point instantiates Settings, factories, adapters, use cases
+and the MCP server.
 
-Exemplo conceitual:
+Conceptual example:
 
 ``` python
 def build_application():
@@ -1008,61 +954,60 @@ def build_application():
     )
 ```
 
-O `main.py` deve iniciar o servidor no transporte stdio no M1.
+`main.py` must start the server on the stdio transport in M1.
 
-Também deve ser definido um ciclo de vida claro para clientes/conexões e
-encerramento. Não deixar recursos sem gerenciamento.
+A clear lifecycle for clients/connections and shutdown must also be
+defined. Do not leave resources unmanaged.
 
 ------------------------------------------------------------------------
 
-# 16. Estratégia de testes
+# 16. Testing strategy
 
 ## 16.1 Unit tests
 
-Testar sem Kafka:
+Test without Kafka:
 
--   Entidades e Value Objects.
--   Regras de domínio.
--   Use cases usando mocks/fakes.
--   Conversões e validações puras.
--   Normalização de erros.
+-   Entities and Value Objects.
+-   Domain rules.
+-   Use cases using mocks/fakes.
+-   Pure conversions and validations.
+-   Error normalization.
 
 ## 16.2 Integration tests
 
-Executar contra Kafka real:
+Run against a real Kafka:
 
--   Conexão e leitura de metadados.
--   Listagem de tópicos.
--   Descrição de tópico.
--   Tratamento de broker indisponível.
--   Comportamento de tópico inexistente.
--   Filtragem de tópicos internos.
+-   Connection and metadata reads.
+-   Topic listing.
+-   Topic description.
+-   Handling an unavailable broker.
+-   Behavior for a non-existent topic.
+-   Filtering of internal topics.
 
 ## 16.3 Contract tests
 
-Verificar que os adapters implementam os Ports esperados e que os
-contratos de entrada/saída permanecem consistentes.
+Verify that the adapters implement the expected Ports and that the
+input/output contracts remain consistent.
 
 ## 16.4 MCP tests
 
--   Inicialização do servidor.
--   Registro das tools.
--   Validação dos argumentos.
--   Execução de cada tool.
--   Formato das respostas.
--   Tratamento de erros sem vazamento de detalhes internos.
+-   Server startup.
+-   Tool registration.
+-   Argument validation.
+-   Execution of each tool.
+-   Response format.
+-   Error handling without leaking internal details.
 
-## 16.5 Cobertura
+## 16.5 Coverage
 
-Meta inicial: 80% de cobertura de branches no código de domínio e
-aplicação, sem perseguir cobertura artificial em código de integração
-gerado ou trivial.
+Initial target: 80% branch coverage in domain and application code, without
+chasing artificial coverage in generated or trivial integration code.
 
 ------------------------------------------------------------------------
 
 # 17. CI/CD
 
-GitHub Actions deve executar em Pull Requests e pushes relevantes:
+GitHub Actions must run on Pull Requests and relevant pushes:
 
 ``` bash
 uv sync --locked
@@ -1072,127 +1017,126 @@ uv run mypy src/
 uv run pytest --cov
 ```
 
-Adicionar job de integração que inicialize Kafka e execute os testes de
-integração.
+Add an integration job that starts Kafka and runs the integration tests.
 
-A CI deve:
+CI must:
 
--   Utilizar versão de Python suportada.
--   Utilizar lockfile.
--   Não usar credenciais reais.
--   Publicar resultados de testes.
--   Falhar em lint, type checking ou testes.
--   Não publicar pacote automaticamente no M1.
+-   Use a supported Python version.
+-   Use the lockfile.
+-   Not use real credentials.
+-   Publish test results.
+-   Fail on lint, type checking or tests.
+-   Not publish the package automatically in M1.
 
 ------------------------------------------------------------------------
 
 # 18. Milestones
 
-## M1 --- Foundation & Cluster Explorer
+## M1 — Foundation & Cluster Explorer
 
-**Status:** Próximo milestone a implementar.
+**Status:** Next milestone to implement.
 
-Objetivo: provar o fluxo ponta a ponta entre cliente MCP, aplicação
-Python e Kafka real.
+Goal: prove the end-to-end flow between an MCP client, the Python
+application and a real Kafka.
 
-### Entregas
+### Deliverables
 
-1.  Inicializar repositório.
-2.  Configurar `pyproject.toml`, `uv` e lockfile.
-3.  Criar Settings.
-4.  Criar Kafka AdminClient Factory.
-5.  Criar Docker Compose com Kafka KRaft.
-6.  Criar entidades de Cluster, Broker, Topic e Partition.
-7.  Criar Ports ClusterReader e TopicReader.
-8.  Criar KafkaClusterAdapter e KafkaTopicAdapter.
-9.  Criar use cases.
-10. Criar MCP server.
-11. Registrar três tools.
-12. Registrar resources e prompt inicial.
-13. Criar testes unitários e de integração.
-14. Criar workflow de CI.
-15. Documentar execução local.
+1.  Initialize the repository.
+2.  Configure `pyproject.toml`, `uv` and the lockfile.
+3.  Create Settings.
+4.  Create the Kafka AdminClient Factory.
+5.  Create Docker Compose with Kafka KRaft.
+6.  Create the Cluster, Broker, Topic and Partition entities.
+7.  Create the ClusterReader and TopicReader Ports.
+8.  Create KafkaClusterAdapter and KafkaTopicAdapter.
+9.  Create the use cases.
+10. Create the MCP server.
+11. Register three tools.
+12. Register resources and the initial prompt.
+13. Create unit and integration tests.
+14. Create the CI workflow.
+15. Document local execution.
 
-### Tools do M1
+### M1 Tools
 
 -   `get_cluster_info`
 -   `list_topics`
 -   `describe_topic`
 
-### Resources do M1
+### M1 Resources
 
 -   `kafka://cluster/info`
 -   `kafka://topics`
 
-### Prompt do M1
+### M1 Prompt
 
 -   `investigate_kafka_cluster`
 
-### Critérios de aceite
+### Acceptance criteria
 
--   Servidor inicia sem erros.
--   Conexão com Kafka local funciona.
--   `get_cluster_info` retorna metadados disponíveis.
--   `list_topics` retorna tópicos.
--   Tópicos internos são filtrados por padrão.
--   `describe_topic` retorna partições, leader, replicas e ISR.
--   Tópico inexistente gera erro controlado.
--   Broker indisponível gera erro controlado e limitado por timeout.
--   Unit tests não dependem de Kafka.
--   Integration tests funcionam com Kafka real.
--   MCP Inspector consegue executar as três tools.
--   Nenhuma operação de escrita é exposta.
--   Segredos não aparecem em logs ou respostas.
+-   The server starts without errors.
+-   The connection to the local Kafka works.
+-   `get_cluster_info` returns the available metadata.
+-   `list_topics` returns topics.
+-   Internal topics are filtered by default.
+-   `describe_topic` returns partitions, leader, replicas and ISR.
+-   A non-existent topic produces a controlled error.
+-   An unavailable broker produces a controlled error, bounded by a timeout.
+-   Unit tests do not depend on Kafka.
+-   Integration tests work with a real Kafka.
+-   The MCP Inspector can run the three tools.
+-   No write operation is exposed.
+-   Secrets do not appear in logs or responses.
 
-## M2 --- Consumer Intelligence
+## M2 — Consumer Intelligence
 
--   Listar e descrever consumer groups.
--   Consultar committed offsets.
--   Consultar log end offsets.
--   Calcular lag por partição e grupo.
--   Ordenar partições por lag.
--   Tratar ausência de committed offset como dado ausente, não zero.
--   Criar classificação inicial de saúde com limites configuráveis.
+-   List and describe consumer groups.
+-   Query committed offsets.
+-   Query log end offsets.
+-   Compute lag per partition and group.
+-   Sort partitions by lag.
+-   Treat a missing committed offset as missing data, not zero.
+-   Create an initial health classification with configurable limits.
 
-## M3 --- Diagnostics Engine
+## M3 — Diagnostics Engine
 
--   Findings estruturados.
--   Severidade configurável.
--   Evidências.
--   Hipóteses e recomendações.
--   Dados insuficientes explicitamente sinalizados.
--   Detecção de partições sem progresso por comparação de snapshots.
--   Não afirmar causa raiz sem evidências suficientes.
+-   Structured findings.
+-   Configurable severity.
+-   Evidence.
+-   Hypotheses and recommendations.
+-   Insufficient data explicitly flagged.
+-   Detection of partitions without progress by comparing snapshots.
+-   Do not claim a root cause without sufficient evidence.
 
-**Regra:** lag alto não significa necessariamente consumer travado. Para
-detectar ausência de progresso, comparar offsets em mais de um instante.
+**Rule:** high lag does not necessarily mean a stuck consumer. To detect
+absence of progress, compare offsets at more than one point in time.
 
-## M4 --- Message Intelligence
+## M4 — Message Intelligence
 
--   Inspeção limitada de mensagens.
--   Metadados, key, headers, timestamp e offset.
--   Busca por chave dentro de limites definidos.
--   DLQ configurável, sem pressupor convenção universal.
--   Limites de quantidade e tamanho.
--   Sanitização de payloads.
+-   Limited message inspection.
+-   Metadata, key, headers, timestamp and offset.
+-   Search by key within defined limits.
+-   Configurable DLQ, without assuming a universal convention.
+-   Quantity and size limits.
+-   Payload sanitization.
 
-## M5 --- Production Readiness
+## M5 — Production Readiness
 
 -   Streamable HTTP.
--   Autenticação e autorização para HTTP.
+-   Authentication and authorization for HTTP.
 -   TLS/SASL.
--   Logging estruturado.
--   Métricas do servidor.
--   Documentação de segurança.
+-   Structured logging.
+-   Server metrics.
+-   Security documentation.
 -   Release v1.0.
 
 ------------------------------------------------------------------------
 
-# 19. README e apresentação pública
+# 19. README and public presentation
 
-O repositório público deve ter documentação em inglês.
+The public repository must have documentation in English.
 
-Estrutura sugerida para README:
+Suggested README structure:
 
 1.  Project overview.
 2.  Problem statement.
@@ -1210,47 +1154,46 @@ Estrutura sugerida para README:
 14. Contributing.
 15. License.
 
-A demonstração deverá mostrar um cliente MCP executando ferramentas
-contra um Kafka local real. Não apresentar dados fictícios como se
-fossem resultados reais.
+The demo should show an MCP client running tools against a real local
+Kafka. Do not present fictional data as if it were real results.
 
-Descrição sugerida para GitHub:
+Suggested GitHub description:
 
 `An open-source MCP server for Kafka observability, diagnostics and troubleshooting using AI agents.`
 
-Repositório:
+Repository:
 
 `FVitor7/streamsage`
 
-Licença proposta: MIT.
+Proposed license: MIT.
 
 ------------------------------------------------------------------------
 
-# 20. Regras de engenharia para Claude Code
+# 20. Engineering rules for Claude Code
 
-Ao implementar:
+When implementing:
 
--   Preferir funções e classes pequenas.
--   Utilizar type hints.
--   Não usar `Any` sem justificativa.
--   Não capturar `Exception` genericamente sem repropagar/normalizar
-    corretamente.
--   Não retornar objetos da biblioteca Kafka para fora dos adapters.
--   Não importar MCP em Application ou Domain.
--   Não importar Kafka em Domain.
--   Não colocar regras de negócio nas tools.
--   Não colocar configurações globais espalhadas pelo código.
--   Não criar singletons globais de cliente.
--   Não adicionar dependência sem necessidade.
--   Não adicionar funcionalidades de escrita.
--   Não expor stack traces aos clientes.
--   Não registrar credenciais ou payloads sensíveis.
--   Documentar decisões técnicas não óbvias.
--   Testar comportamentos de erro e limites, não apenas o caminho feliz.
+-   Prefer small functions and classes.
+-   Use type hints.
+-   Do not use `Any` without justification.
+-   Do not catch `Exception` generically without re-raising/normalizing it
+    correctly.
+-   Do not return Kafka library objects outside the adapters.
+-   Do not import MCP in Application or Domain.
+-   Do not import Kafka in Domain.
+-   Do not put business rules in tools.
+-   Do not scatter global configuration across the code.
+-   Do not create global client singletons.
+-   Do not add a dependency without need.
+-   Do not add write features.
+-   Do not expose stack traces to clients.
+-   Do not log credentials or sensitive payloads.
+-   Document non-obvious technical decisions.
+-   Test error and boundary behaviors, not only the happy path.
 
-## Tratamento de erros
+## Error handling
 
-Definir uma hierarquia pequena e útil, por exemplo:
+Define a small, useful hierarchy, for example:
 
 -   `StreamSageError`
 -   `KafkaConnectionError`
@@ -1259,69 +1202,67 @@ Definir uma hierarquia pequena e útil, por exemplo:
 -   `KafkaMetadataError`
 -   `ConfigurationError`
 
-A infraestrutura traduz erros específicos da biblioteca para erros da
-aplicação. A camada MCP converte erros conhecidos em respostas seguras e
-úteis, sem revelar segredos ou stack traces.
+Infrastructure translates library-specific errors into application errors.
+The MCP layer converts known errors into safe and useful responses, without
+revealing secrets or stack traces.
 
-## Observabilidade do próprio servidor
+## Observability of the server itself
 
-Logs estruturados devem registrar:
+Structured logs must record:
 
--   Nome da operação/tool.
--   Duração.
--   Resultado (sucesso/falha).
--   Tipo de erro normalizado.
--   Identificador de correlação, se disponível.
+-   Operation/tool name.
+-   Duration.
+-   Result (success/failure).
+-   Normalized error type.
+-   Correlation identifier, if available.
 
-Não registrar senhas, tokens, certificados ou payloads de mensagens.
+Do not log passwords, tokens, certificates or message payloads.
 
 ------------------------------------------------------------------------
 
-# 21. Primeira tarefa para Claude Code
+# 21. First task for Claude Code
 
-Comece implementando **somente a fundação do M1**, sem tentar antecipar
-M2--M5.
+Start by implementing **only the M1 foundation**, without trying to
+anticipate M2–M5.
 
-Ordem de trabalho:
+Work order:
 
-1.  Inspecione o repositório e confirme se está vazio ou se já contém
-    arquivos.
-2.  Verifique as versões estáveis atuais de Python, SDK MCP e
-    `confluent-kafka` nas documentações oficiais.
-3.  Crie a estrutura mínima `src` e `tests`.
-4.  Configure `pyproject.toml`, uv e lockfile com versões compatíveis
-    reais.
-5.  Configure Ruff, mypy e pytest.
-6.  Crie `.gitignore`, `.env.example` e `.python-version`.
-7.  Crie Docker Compose com um broker Apache Kafka em modo KRaft e tag
-    explícita.
-8.  Implemente Settings e Kafka AdminClient Factory.
-9.  Implemente entidades de domínio e Ports para Cluster e Topic.
-10. Implemente os adapters Kafka e os dois use cases.
-11. Implemente o MCP server com `get_cluster_info`, `list_topics` e
+1.  Inspect the repository and confirm whether it is empty or already
+    contains files.
+2.  Check the current stable versions of Python, the MCP SDK and
+    `confluent-kafka` in the official documentation.
+3.  Create the minimal `src` and `tests` structure.
+4.  Configure `pyproject.toml`, uv and the lockfile with real compatible
+    versions.
+5.  Configure Ruff, mypy and pytest.
+6.  Create `.gitignore`, `.env.example` and `.python-version`.
+7.  Create Docker Compose with one Apache Kafka broker in KRaft mode and an
+    explicit tag.
+8.  Implement Settings and the Kafka AdminClient Factory.
+9.  Implement the domain entities and the Ports for Cluster and Topic.
+10. Implement the Kafka adapters and the two use cases.
+11. Implement the MCP server with `get_cluster_info`, `list_topics` and
     `describe_topic`.
-12. Implemente os Resources e o Prompt definidos para M1, se a API
-    oficial da versão selecionada permitir.
-13. Crie testes unitários e de integração.
-14. Execute lint, type checking e testes.
-15. Atualize README com instruções reais e verificadas.
+12. Implement the Resources and the Prompt defined for M1, if the official
+    API of the selected version allows it.
+13. Create unit and integration tests.
+14. Run lint, type checking and tests.
+15. Update the README with real, verified instructions.
 
-Não avance para consumer groups, lag ou diagnóstico neste primeiro
-ciclo.
+Do not move on to consumer groups, lag or diagnostics in this first cycle.
 
-Ao final, apresente:
+At the end, present:
 
--   Árvore real de arquivos criada.
--   Decisões técnicas e versões selecionadas.
--   Comandos para iniciar Kafka.
--   Comandos para instalar e executar StreamSage.
--   Como conectar um cliente MCP ou usar MCP Inspector.
--   Resultado dos testes.
--   Pendências conhecidas.
--   Confirmação de que nenhuma operação Kafka de escrita foi
-    implementada.
+-   The actual file tree created.
+-   Technical decisions and selected versions.
+-   Commands to start Kafka.
+-   Commands to install and run StreamSage.
+-   How to connect an MCP client or use the MCP Inspector.
+-   Test results.
+-   Known pending items.
+-   Confirmation that no Kafka write operation was implemented.
 
-**Definição de sucesso do primeiro ciclo:** um cliente MCP consegue
-chamar `get_cluster_info` e `list_topics` contra um broker Kafka local
-real, com testes automatizados e sem violar a arquitetura definida neste
-documento.
+**Definition of success for the first cycle:** an MCP client can call
+`get_cluster_info` and `list_topics` against a real local Kafka broker, with
+automated tests and without violating the architecture defined in this
+document.
