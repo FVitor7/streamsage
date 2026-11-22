@@ -1,10 +1,22 @@
 [project]
 name = "streamsage"
-version = "0.1.0"
+version = "1.0.0"
 description = "AI-powered Kafka observability and troubleshooting MCP server"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
+keywords = ["kafka", "mcp", "model-context-protocol", "observability", "ai-agents"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
+
 dependencies = [
     "confluent-kafka>=2.16,<3.0",
     "mcp[cli]>=2.3,<3.0",
@@ -13,6 +25,12 @@ dependencies = [
     "pydantic-settings>=2.16,<3.0",
     "uvicorn>=0.54,<1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/FVitor7/streamsage"
+Documentation = "https://github.com/FVitor7/streamsage/tree/main/docs"
+Changelog = "https://github.com/FVitor7/streamsage/blob/main/CHANGELOG.md"
+Issues = "https://github.com/FVitor7/streamsage/issues"
 
 [project.scripts]
 streamsage = "streamsage.main:main"
