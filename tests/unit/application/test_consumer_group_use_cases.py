@@ -1,5 +1,8 @@
 import pytest
 
+from streamsage.application.use_cases.analyze_consumer_health import (
+    AnalyzeConsumerHealthUseCase,
+)
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
@@ -7,6 +10,8 @@ from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseC
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
+from streamsage.domain.diagnostics.consumer_health import LagThresholds
+from streamsage.domain.diagnostics.severity import HealthStatus
 from streamsage.domain.entities.consumer_group import ConsumerGroupState
 from streamsage.domain.exceptions import (
     InvalidInputError,
@@ -65,3 +70,30 @@ def test_consumer_lag_validates_id_and_propagates_errors() -> None:
     reader = FakeConsumerGroupReader(error=KafkaConnectionError("down"))
     with pytest.raises(KafkaConnectionError):
         GetConsumerLagUseCase(reader).execute("billing")
+
+
+def test_analyze_consumer_health_combines_group_and_lag() -> None:
+    reader = FakeConsumerGroupReader()
+    report = AnalyzeConsumerHealthUseCase(
+        reader, LagThresholds(warning=50, critical=500)
+    ).execute("billing")
+    assert report.group == SAMPLE_GROUP
+    assert report.lag.total_lag == 70
+    # payments-0 has lag 60 >= 50; payments-2 has lag but is not assigned to
+    # the only member (which holds payments-0 and -1); payments-1 lag is unknown.
+    assert report.status is HealthStatus.WARNING
+    assert [f.code for f in report.findings] == [
+        "LAG_ABOVE_WARNING",
+        "UNASSIGNED_PARTITIONS_WITH_LAG",
+        "LAG_UNKNOWN",
+    ]
+
+
+def test_analyze_consumer_health_validates_and_propagates_errors() -> None:
+    thresholds = LagThresholds(warning=1, critical=2)
+    reader = FakeConsumerGroupReader()
+    with pytest.raises(InvalidInputError):
+        AnalyzeConsumerHealthUseCase(reader, thresholds).execute("")
+    assert reader.requested == []
+    with pytest.raises(KafkaResourceNotFoundError):
+        AnalyzeConsumerHealthUseCase(reader, thresholds).execute("missing")

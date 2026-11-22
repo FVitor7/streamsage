@@ -6,6 +6,9 @@ wire format can evolve independently of the domain.
 
 from pydantic import BaseModel, Field
 
+from streamsage.domain.diagnostics.consumer_health import ConsumerHealthReport
+from streamsage.domain.diagnostics.finding import EvidenceValue, Finding
+from streamsage.domain.diagnostics.severity import HealthStatus, Severity
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,
@@ -267,4 +270,68 @@ class ConsumerLagResponse(BaseModel):
             unknown_lag_partition_count=lag.unknown_lag_partition_count,
             truncated=len(listed) < len(lag.partitions),
             partitions=[PartitionLagResponse.from_domain(p) for p in listed],
+        )
+
+
+class EvidenceResponse(BaseModel):
+    label: str
+    value: EvidenceValue
+
+
+class FindingResponse(BaseModel):
+    code: str = Field(description="Stable identifier of the finding type.")
+    severity: Severity
+    summary: str
+    evidence: list[EvidenceResponse]
+
+    @classmethod
+    def from_domain(cls, finding: Finding) -> "FindingResponse":
+        return cls(
+            code=finding.code,
+            severity=finding.severity,
+            summary=finding.summary,
+            evidence=[
+                EvidenceResponse(label=e.label, value=e.value) for e in finding.evidence
+            ],
+        )
+
+
+class LagThresholdsResponse(BaseModel):
+    warning: int
+    critical: int
+
+
+class ConsumerHealthResponse(BaseModel):
+    group_id: str
+    status: HealthStatus = Field(
+        description=(
+            "Worst finding severity; 'unknown' when no lag could be determined "
+            "and nothing else was wrong. 'unknown' is not 'healthy'."
+        )
+    )
+    state: ConsumerGroupState
+    member_count: int
+    total_lag: int | None
+    max_lag: int | None
+    thresholds: LagThresholdsResponse
+    findings: list[FindingResponse]
+    limitations: list[str] = Field(
+        description="What this assessment cannot show; always relevant."
+    )
+
+    @classmethod
+    def from_domain(cls, report: ConsumerHealthReport) -> "ConsumerHealthResponse":
+        return cls(
+            group_id=report.group.group_id,
+            status=report.status,
+            state=report.group.state,
+            member_count=report.group.member_count,
+            total_lag=report.lag.total_lag,
+            max_lag=report.lag.max_lag,
+            thresholds=LagThresholdsResponse(
+                warning=report.thresholds.warning,
+                critical=report.thresholds.critical,
+            ),
+            findings=[FindingResponse.from_domain(f) for f in report.findings],
+            limitations=list(report.limitations),
         )

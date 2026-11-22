@@ -7,9 +7,8 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M2 — Consumer Intelligence** in progress. Consumer groups and lag
-> are available; health analysis and diagnostics are on the
-> [roadmap](#roadmap).
+> Status: **M2 — Consumer Intelligence** complete: consumer groups, lag and
+> health analysis. The diagnostics engine (M3) is on the [roadmap](#roadmap).
 
 ## Why
 
@@ -32,6 +31,7 @@ will also return deterministic, evidence-based diagnostics.
 | Tool     | `list_consumer_groups`      | Consumer groups with their state; optional `states` filter      |
 | Tool     | `describe_consumer_group`   | State, assignor, coordinator, members and their partitions      |
 | Tool     | `get_consumer_lag`          | Per-partition lag, largest first, with total/max lag; `max_partitions` |
+| Tool     | `analyze_consumer_health`   | healthy / warning / critical / unknown, with evidence-backed findings and limitations |
 | Resource | `kafka://cluster/info`      | Cluster info as JSON                                            |
 | Resource | `kafka://topics`            | Topic list as JSON                                              |
 | Prompt   | `investigate_kafka_cluster` | Guided, evidence-based investigation (optional `focus_topic`)   |
@@ -124,6 +124,8 @@ StreamSage reads its configuration from environment variables prefixed with
 | `STREAMSAGE_KAFKA_SOCKET_TIMEOUT`     | `10`             | Seconds                                              |
 | `STREAMSAGE_LOG_LEVEL`                | `INFO`           | Logs go to stderr as JSON lines                      |
 | `STREAMSAGE_INCLUDE_INTERNAL_TOPICS`  | `false`          | Default for `list_topics` and `kafka://topics`       |
+| `STREAMSAGE_LAG_WARNING_THRESHOLD`    | `1000`           | Per-partition lag (messages) for a `warning` finding |
+| `STREAMSAGE_LAG_CRITICAL_THRESHOLD`   | `10000`          | Per-partition lag for `critical`; must be ≥ warning  |
 
 The server checks for inconsistent settings at startup, for example a SASL
 protocol without credentials, or credentials without a SASL protocol. If it
@@ -199,8 +201,8 @@ excluded by default. See [docs/development.md](docs/development.md).
 ## Roadmap
 
 - **M1 — Foundation & Cluster Explorer** ✅ cluster info, topics, partitions
-- **M2 — Consumer Intelligence**: consumer groups and lag ✅; health analysis
-  with configurable thresholds next
+- **M2 — Consumer Intelligence** ✅ consumer groups, lag, health analysis
+  with configurable thresholds
 - **M3 — Diagnostics Engine**: structured, evidence-based findings;
   stalled-partition detection (`detect_stalled_partitions`) by comparing
   offset snapshots over time

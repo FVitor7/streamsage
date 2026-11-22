@@ -17,8 +17,10 @@ Follow these steps:
    partition's leader, replicas and in-sync replicas (ISR). Partitions
    without a leader or with fewer in-sync replicas than replicas deserve
    attention.
-4. Call `list_consumer_groups`, then `get_consumer_lag` for the groups that
-   matter (and `describe_consumer_group` to see members and assignments).
+4. Call `list_consumer_groups`, then `analyze_consumer_health` for the
+   groups that matter. Use `get_consumer_lag` for per-partition detail and
+   `describe_consumer_group` to see members and assignments. Quote each
+   finding's evidence and repeat its limitations.
    A lag of null means the offset is unknown, not zero. Lag is a single
    snapshot: high lag alone does not prove a consumer is stuck, since that
    requires seeing offsets fail to advance over time.

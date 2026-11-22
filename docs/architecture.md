@@ -96,6 +96,31 @@ being silently omitted. Rules:
   returned are still listed and a warning is logged. If all brokers fail,
   the call fails.
 
+**Consumer health.** `analyze_consumer_health` is a pure domain function
+(`domain/diagnostics/consumer_health.py`) applied to the group description
+and its lag. Each rule produces a `Finding`: a stable `code`, a `severity`,
+a summary, and the `evidence` behind it. Possible explanations are worded as
+unverified hypotheses.
+
+| Code | Severity | When |
+| --- | --- | --- |
+| `LAG_ABOVE_CRITICAL` | critical | Some partition lag ≥ critical threshold |
+| `LAG_ABOVE_WARNING` | warning | Some partition lag ≥ warning threshold (and none critical) |
+| `NO_ACTIVE_MEMBERS` | warning | No members while messages are pending |
+| `REBALANCING` | warning | Group is preparing or completing a rebalance |
+| `UNASSIGNED_PARTITIONS_WITH_LAG` | warning | Members exist, but partitions with lag are assigned to none |
+| `INACTIVE_CAUGHT_UP` | info | No members and nothing pending |
+| `LAG_UNKNOWN` | info | Some partitions have unknown lag |
+| `NO_PARTITIONS` | info | No committed offsets and no assignments |
+| `STATE_UNKNOWN` | info | Coordinator reported no known state |
+
+The overall status is the worst severity found. With no warning or critical
+finding, it is `unknown` if no lag could be determined at all, and
+`healthy` otherwise. Every report carries its limitations: it is one
+snapshot, and the thresholds (`STREAMSAGE_LAG_*_THRESHOLD`, per partition, in
+messages) are configured values, not derived from the consumer's throughput.
+The analysis never states that a consumer is stuck or names a root cause.
+
 **Stalled partitions are an M3 feature.** The spec's M2 tool table lists
 `detect_stalled_partitions`, but proving that a consumer is not progressing
 requires comparing offsets at more than one point in time (spec, M3), and M2

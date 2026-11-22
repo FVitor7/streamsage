@@ -11,6 +11,9 @@ import time
 
 import pytest
 
+from streamsage.application.use_cases.analyze_consumer_health import (
+    AnalyzeConsumerHealthUseCase,
+)
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
@@ -18,6 +21,8 @@ from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseC
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
+from streamsage.domain.diagnostics.consumer_health import LagThresholds
+from streamsage.domain.diagnostics.severity import HealthStatus
 from streamsage.domain.entities.consumer_group import ConsumerGroup, ConsumerGroupState
 from streamsage.domain.exceptions import KafkaResourceNotFoundError
 from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
@@ -103,3 +108,28 @@ def _wait_for_stable_group(
         f"{group_id} not stable after {timeout}s (last: {group}). "
         "Start it with `docker compose up -d kafka-consumer`."
     )
+
+
+DEFAULT_THRESHOLDS = LagThresholds(warning=1_000, critical=10_000)
+
+
+def test_health_of_inactive_group_with_pending_messages(
+    adapter: KafkaConsumerGroupAdapter,
+) -> None:
+    report = AnalyzeConsumerHealthUseCase(adapter, DEFAULT_THRESHOLDS).execute(
+        "orders-service"
+    )
+    # Max partition lag (~66) is far below the thresholds, but nobody consumes.
+    assert report.status is HealthStatus.WARNING
+    assert [f.code for f in report.findings] == ["NO_ACTIVE_MEMBERS"]
+
+
+@pytest.mark.parametrize("group_id", ["payments-service", "inventory-service"])
+def test_health_of_caught_up_groups(
+    adapter: KafkaConsumerGroupAdapter, group_id: str
+) -> None:
+    if group_id == "inventory-service":
+        _wait_for_stable_group(adapter, group_id)
+    report = AnalyzeConsumerHealthUseCase(adapter, DEFAULT_THRESHOLDS).execute(group_id)
+    assert report.status is HealthStatus.HEALTHY
+    assert report.lag.total_lag == 0

@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     log_level: LogLevel = "INFO"
     include_internal_topics: bool = False
 
+    # Per-partition lag, in messages, used by analyze_consumer_health.
+    # Starting points only: tune them to each consumer's normal throughput.
+    lag_warning_threshold: int = Field(default=1_000, ge=1)
+    lag_critical_threshold: int = Field(default=10_000, ge=1)
+
     @field_validator(
         "kafka_sasl_mechanism",
         "kafka_sasl_username",
@@ -106,6 +111,11 @@ class Settings(BaseSettings):
             and not Path(self.kafka_ssl_ca_location).is_file()
         ):
             raise ValueError("STREAMSAGE_KAFKA_SSL_CA_LOCATION is not a readable file")
+        if self.lag_critical_threshold < self.lag_warning_threshold:
+            raise ValueError(
+                "STREAMSAGE_LAG_CRITICAL_THRESHOLD must be greater than or equal "
+                "to STREAMSAGE_LAG_WARNING_THRESHOLD"
+            )
         return self
 
     @property

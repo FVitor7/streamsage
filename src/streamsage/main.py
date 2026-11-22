@@ -9,6 +9,9 @@ from typing import NoReturn
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
+from streamsage.application.use_cases.analyze_consumer_health import (
+    AnalyzeConsumerHealthUseCase,
+)
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
@@ -19,6 +22,7 @@ from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
+from streamsage.domain.diagnostics.consumer_health import LagThresholds
 from streamsage.domain.exceptions import ConfigurationError
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
@@ -57,6 +61,13 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
             list_consumer_groups_use_case=ListConsumerGroupsUseCase(group_reader),
             describe_consumer_group_use_case=DescribeConsumerGroupUseCase(group_reader),
             get_consumer_lag_use_case=GetConsumerLagUseCase(group_reader),
+            analyze_consumer_health_use_case=AnalyzeConsumerHealthUseCase(
+                group_reader,
+                LagThresholds(
+                    warning=settings.lag_warning_threshold,
+                    critical=settings.lag_critical_threshold,
+                ),
+            ),
             include_internal_topics=settings.include_internal_topics,
         )
 

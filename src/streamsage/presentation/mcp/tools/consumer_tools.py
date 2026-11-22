@@ -4,6 +4,9 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from streamsage.application.use_cases.analyze_consumer_health import (
+    AnalyzeConsumerHealthUseCase,
+)
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
@@ -17,6 +20,7 @@ from streamsage.presentation.mcp.errors import operation_boundary
 from streamsage.presentation.mcp.schemas import (
     ConsumerGroupDetailResponse,
     ConsumerGroupListResponse,
+    ConsumerHealthResponse,
     ConsumerLagResponse,
 )
 from streamsage.presentation.mcp.tools.annotations import READ_ONLY
@@ -39,6 +43,7 @@ def register_consumer_tools(
     list_groups_use_case: ListConsumerGroupsUseCase,
     describe_group_use_case: DescribeConsumerGroupUseCase,
     get_lag_use_case: GetConsumerLagUseCase,
+    analyze_health_use_case: AnalyzeConsumerHealthUseCase,
 ) -> None:
     @server.tool(
         name="list_consumer_groups",
@@ -104,3 +109,22 @@ def register_consumer_tools(
         with operation_boundary("get_consumer_lag", ToolError, ctx.request_id):
             lag = get_lag_use_case.execute(group_id)
         return ConsumerLagResponse.from_domain(lag, max_partitions=max_partitions)
+
+    @server.tool(
+        name="analyze_consumer_health",
+        title="Analyze consumer group health",
+        description=(
+            "Classify a consumer group's health (healthy, warning, critical or "
+            "unknown) from its state, members and current lag, using the "
+            "server's configured lag thresholds. Returns each finding with the "
+            "evidence behind it and the limitations of the assessment. It uses "
+            "a single snapshot, so it never claims a consumer is stuck."
+        ),
+        annotations=READ_ONLY,
+    )
+    def analyze_consumer_health(
+        group_id: GroupId, ctx: Context
+    ) -> ConsumerHealthResponse:
+        with operation_boundary("analyze_consumer_health", ToolError, ctx.request_id):
+            report = analyze_health_use_case.execute(group_id)
+        return ConsumerHealthResponse.from_domain(report)
