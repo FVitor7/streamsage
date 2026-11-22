@@ -1,0 +1,63 @@
+[project]
+name = "streamsage"
+version = "0.1.0"
+description = "AI-powered Kafka observability and troubleshooting MCP server"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "confluent-kafka>=2.16,<3.0",
+    "mcp[cli]>=2.3,<3.0",
+    "pydantic>=2.14,<3.0",
+    "pydantic-settings>=2.16,<3.0",
+]
+
+[project.scripts]
+streamsage = "streamsage.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/streamsage"]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4",
+    "pre-commit>=4.7",
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "ruff>=0.17",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Integration tests need a running Kafka broker; run them with `-m integration`.
+addopts = "-ra --strict-markers -m 'not integration'"
+markers = [
+    "integration: requires a real Kafka broker (docker compose up)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+# The spec is a source document; its code samples are illustrative.
+extend-exclude = ["PROJECT_SPEC.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+
+[tool.coverage.run]
+branch = true
+source = ["streamsage"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
