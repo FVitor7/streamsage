@@ -43,8 +43,9 @@ def test_build_application_wires_server_and_closes_client(
     monkeypatch.setattr(
         main_module.KafkaAdminClientFactory, "create", lambda self, events: admin
     )
-    with main_module.build_application(Settings()) as server:
-        assert server.name == "streamsage"
+    with main_module.build_application(Settings()) as app:
+        assert app.server.name == "streamsage"
+        assert app.metrics.registry is not None
         assert admin.closed is False
     assert admin.closed is True
 

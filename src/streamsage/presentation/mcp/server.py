@@ -4,6 +4,8 @@ The server is a thin adapter: it validates arguments, calls use cases and
 serializes results. It holds no Kafka client and no business rules.
 """
 
+from typing import Any
+
 from mcp.server.mcpserver import MCPServer
 
 from streamsage import __version__
@@ -29,6 +31,7 @@ from streamsage.application.use_cases.list_consumer_groups import (
 from streamsage.application.use_cases.list_dlq_topics import ListDlqTopicsUseCase
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.presentation.mcp.authorization import ScopeAuthorizationMiddleware
+from streamsage.presentation.mcp.metrics_middleware import MetricsMiddleware
 from streamsage.presentation.mcp.prompts.diagnostics_prompts import (
     register_diagnostics_prompts,
 )
@@ -39,6 +42,7 @@ from streamsage.presentation.mcp.tools.cluster_tools import register_cluster_too
 from streamsage.presentation.mcp.tools.consumer_tools import register_consumer_tools
 from streamsage.presentation.mcp.tools.message_tools import register_message_tools
 from streamsage.presentation.mcp.tools.topic_tools import register_topic_tools
+from streamsage.shared.metrics import ServerMetrics
 
 SERVER_NAME = "streamsage"
 
@@ -73,15 +77,20 @@ def create_server(
     message_max_limit: int = 100,
     message_payloads_enabled: bool = False,
     include_internal_topics: bool = False,
+    metrics: ServerMetrics | None = None,
 ) -> MCPServer:
+    middleware: list[Any] = [ScopeAuthorizationMiddleware(metrics)]
+    if metrics is not None:
+        # Outermost, so it also records calls denied by authorization.
+        middleware.insert(0, MetricsMiddleware(metrics))
     server: MCPServer = MCPServer(
         name=SERVER_NAME,
         title="StreamSage",
         description="AI-powered Kafka observability and troubleshooting.",
         instructions=INSTRUCTIONS,
         version=__version__,
-        # Enforces per-tool scopes on HTTP requests; a no-op over stdio.
-        middleware=[ScopeAuthorizationMiddleware()],
+        # Scopes are enforced on HTTP requests only; a no-op over stdio.
+        middleware=middleware,
     )
     register_cluster_tools(server, get_cluster_info_use_case)
     register_topic_tools(

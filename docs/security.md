@@ -82,6 +82,11 @@ please report it.
     exposing it beyond the host; a warning is logged otherwise.
   - Rotate a token by adding the new hash, updating clients, then removing
     the old entry.
+  - `/healthz` is public and reveals nothing beyond liveness. `/metrics`
+    requires a valid token (any scope) unless
+    `STREAMSAGE_HTTP_METRICS_PUBLIC=true`. Metrics contain tool and
+    operation names and counts, never arguments, topic names, keys or
+    message data, and their label values are bounded.
 - All tool arguments are validated against typed schemas. Topic names must
   match Kafka's naming rules (`[a-zA-Z0-9._-]`, 1–249 characters). No input
   reaches a shell or a file path.

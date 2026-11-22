@@ -278,3 +278,7 @@ def test_http_transport_requires_tokens() -> None:
 
 def test_non_loopback_http_host_is_detected() -> None:
     assert Settings(http_host="0.0.0.0").http_is_loopback is False
+
+
+def test_metrics_are_protected_by_default() -> None:
+    assert Settings().http_metrics_public is False

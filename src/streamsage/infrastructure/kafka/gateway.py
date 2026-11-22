@@ -11,8 +11,9 @@ rules to every request:
 
 import concurrent.futures
 import logging
-from collections.abc import Callable, Hashable, Mapping
-from typing import TypeVar
+from collections.abc import Callable, Hashable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
+from typing import Protocol, TypeVar
 
 from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient
@@ -26,6 +27,7 @@ from streamsage.domain.exceptions import (
 )
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.errors import translate_kafka_exception
+from streamsage.shared.metrics import KafkaRequestTimer
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +60,41 @@ class KafkaAdminGateway:
         admin_client: AdminClient,
         timeout_seconds: float,
         error_events: KafkaErrorEvents,
+        metrics: "KafkaMetrics | None" = None,
     ) -> None:
         self._admin_client = admin_client
         self._timeout_seconds = timeout_seconds
         self._error_events = error_events
+        self._metrics: KafkaMetrics = metrics or NoKafkaMetrics()
 
     def cluster_metadata(self, operation: str) -> ClusterMetadata:
+        """Full cluster metadata: brokers, controller and *all* topics."""
+        with self._metrics.kafka_request(operation):
+            return self._cluster_metadata(operation)
+
+    def request(
+        self,
+        operation: str,
+        start: RequestStarter[T],
+        *,
+        not_found_message: str | None = None,
+    ) -> T:
+        """Start a future-based admin request and wait for its result."""
+        with self._metrics.kafka_request(operation) as timer:
+            try:
+                return self._request(operation, start, not_found_message)
+            except KafkaResourceNotFoundError:
+                timer.outcome = "not_found"
+                raise
+
+    def request_each(
+        self, operation: str, start: MultiRequestStarter[K, T]
+    ) -> dict[K, T | None]:
+        """Run an admin request that returns one future per key."""
+        with self._metrics.kafka_request(operation):
+            return self._request_each(operation, start)
+
+    def _cluster_metadata(self, operation: str) -> ClusterMetadata:
         """Full cluster metadata: brokers, controller and *all* topics.
 
         Metadata is never requested for a specific topic name: on brokers
@@ -76,12 +107,11 @@ class KafkaAdminGateway:
         self._after_success()
         return metadata
 
-    def request(
+    def _request(
         self,
         operation: str,
         start: RequestStarter[T],
-        *,
-        not_found_message: str | None = None,
+        not_found_message: str | None,
     ) -> T:
         """Start a future-based admin request and wait for its result.
 
@@ -107,7 +137,7 @@ class KafkaAdminGateway:
         self._after_success()
         return result
 
-    def request_each(
+    def _request_each(
         self, operation: str, start: MultiRequestStarter[K, T]
     ) -> dict[K, T | None]:
         """Run an admin request that returns one future per key.
@@ -173,6 +203,22 @@ class KafkaAdminGateway:
         # errors reach KafkaErrorEvents) and keeps the queue from growing while
         # a broker is unreachable.
         self._admin_client.poll(0)
+
+
+class KafkaMetrics(Protocol):
+    """What the gateway needs from ``ServerMetrics``."""
+
+    def kafka_request(
+        self, operation: str
+    ) -> AbstractContextManager[KafkaRequestTimer]: ...
+
+
+class NoKafkaMetrics:
+    """Used when no metrics are configured (for example in tests)."""
+
+    @contextmanager
+    def kafka_request(self, operation: str) -> Iterator[KafkaRequestTimer]:
+        yield KafkaRequestTimer()
 
 
 def _is_not_found(exc: KafkaException) -> bool:

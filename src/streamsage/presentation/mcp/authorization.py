@@ -15,6 +15,8 @@ from typing import Any
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 
+from streamsage.shared.metrics import ServerMetrics
+
 logger = logging.getLogger("streamsage.auth")
 
 METADATA_SCOPE = "kafka:metadata"
@@ -56,6 +58,9 @@ class Principal:
 class ScopeAuthorizationMiddleware:
     """MCP server middleware enforcing ``TOOL_SCOPES`` on HTTP requests."""
 
+    def __init__(self, metrics: ServerMetrics | None = None) -> None:
+        self._metrics = metrics
+
     async def __call__(
         self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
     ) -> HandlerResult:
@@ -71,16 +76,22 @@ class ScopeAuthorizationMiddleware:
             tool = str((ctx.params or {}).get("name", ""))
             required = TOOL_SCOPES.get(tool)
             if not principal.allows(required):
+                self._count_denial(tool if tool in TOOL_SCOPES else "unknown")
                 return _deny(principal, tool, required)
         if ctx.method in {"resources/read", "resources/list"} and not principal.allows(
             RESOURCE_SCOPE
         ):
+            self._count_denial(ctx.method)
             return _deny(principal, ctx.method, RESOURCE_SCOPE)
 
         result = await call_next(ctx)
         if ctx.method == "tools/list":
             return _visible_tools(result, principal)
         return result
+
+    def _count_denial(self, target: str) -> None:
+        if self._metrics is not None:
+            self._metrics.authorization_denials.labels(target=target).inc()
 
 
 def _visible_tools(result: HandlerResult, principal: Principal) -> HandlerResult:

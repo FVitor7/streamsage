@@ -8,7 +8,8 @@ Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
 > Status: **M5 — Production Readiness** in progress: Streamable HTTP with
-> bearer tokens and per-tool scopes is available. See the [roadmap](#roadmap).
+> bearer tokens and per-tool scopes, and Prometheus metrics, are available.
+> See the [roadmap](#roadmap).
 
 ## Why
 
@@ -144,6 +145,38 @@ without at least one token. It binds to `127.0.0.1` by default; to expose
 it, set `STREAMSAGE_HTTP_HOST` and put a TLS-terminating reverse proxy in
 front, because StreamSage serves plain HTTP.
 
+### Metrics and health
+
+In HTTP mode, StreamSage also serves:
+
+- `GET /healthz`: liveness check, public, does not contact Kafka.
+- `GET /metrics`: Prometheus metrics. Requires a valid token unless
+  `STREAMSAGE_HTTP_METRICS_PUBLIC=true`.
+
+| Metric | Labels |
+| --- | --- |
+| `streamsage_tool_calls_total` | `tool`, `outcome` (`success`, `error`, `crash`) |
+| `streamsage_tool_duration_seconds` | `tool` |
+| `streamsage_kafka_requests_total` | `operation`, `outcome` (`success`, `not_found`, `failure`) |
+| `streamsage_kafka_request_duration_seconds` | `operation` |
+| `streamsage_http_auth_failures_total` | `reason` |
+| `streamsage_authorization_denials_total` | `target` |
+| `streamsage_build_info` | `version` |
+
+Tool names that StreamSage does not define are recorded as `unknown`, so
+clients cannot create unbounded label values. A Prometheus scrape job with a
+token:
+
+```yaml
+scrape_configs:
+  - job_name: streamsage
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/streamsage.token
+    static_configs:
+      - targets: ["streamsage:8000"]
+```
+
 ## Kafka configuration
 
 StreamSage reads its configuration from environment variables prefixed with
@@ -164,6 +197,7 @@ StreamSage reads its configuration from environment variables prefixed with
 | `STREAMSAGE_TRANSPORT`                | `stdio`          | `stdio` or `http` (Streamable HTTP)                  |
 | `STREAMSAGE_HTTP_HOST` / `_PORT`      | `127.0.0.1` / `8000` | HTTP listen address (path `/mcp`)                |
 | `STREAMSAGE_HTTP_TOKENS`              | `[]`             | JSON list of `{name, sha256, scopes}`; required for HTTP |
+| `STREAMSAGE_HTTP_METRICS_PUBLIC`      | `false`          | Serve `/metrics` without a token                     |
 | `STREAMSAGE_INCLUDE_INTERNAL_TOPICS`  | `false`          | Default for `list_topics` and `kafka://topics`       |
 | `STREAMSAGE_LAG_WARNING_THRESHOLD`    | `1000`           | Per-partition lag (messages) for a `warning` finding |
 | `STREAMSAGE_LAG_CRITICAL_THRESHOLD`   | `10000`          | Per-partition lag for `critical`; must be ≥ warning  |
@@ -266,7 +300,7 @@ excluded by default. See [docs/development.md](docs/development.md).
 - **M4 — Message Intelligence** ✅ bounded, sanitized message inspection,
   key search and configurable DLQ topics
 - **M5 — Production Readiness**: Streamable HTTP with bearer tokens and
-  scopes ✅; Prometheus metrics and the v1.0 release next
+  scopes ✅; Prometheus metrics ✅; v1.0 release next
 
 ## Contributing
 
