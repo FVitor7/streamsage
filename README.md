@@ -7,9 +7,8 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M5 — Production Readiness** in progress: Streamable HTTP with
-> bearer tokens and per-tool scopes, and Prometheus metrics, are available.
-> See the [roadmap](#roadmap).
+> Status: **v1.0.0**, the first stable release. All five milestones of the
+> [roadmap](#roadmap) are complete; see the [changelog](CHANGELOG.md).
 
 ## Why
 
@@ -83,6 +82,23 @@ See [docs/architecture.md](docs/architecture.md) for details and decisions.
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker (for the local Kafka broker)
+
+## Installation
+
+StreamSage is distributed through
+[GitHub Releases](https://github.com/FVitor7/streamsage/releases), not PyPI.
+Install the released wheel as a tool:
+
+```bash
+uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.0.0/streamsage-1.0.0-py3-none-any.whl
+streamsage --help
+```
+
+Or run a tagged version straight from the repository:
+
+```bash
+uvx --from git+https://github.com/FVitor7/streamsage@v1.0.0 streamsage
+```
 
 ## Quick start
 
@@ -299,8 +315,8 @@ excluded by default. See [docs/development.md](docs/development.md).
   detection by comparing offsets over time
 - **M4 — Message Intelligence** ✅ bounded, sanitized message inspection,
   key search and configurable DLQ topics
-- **M5 — Production Readiness**: Streamable HTTP with bearer tokens and
-  scopes ✅; Prometheus metrics ✅; v1.0 release next
+- **M5 — Production Readiness** ✅ Streamable HTTP with bearer tokens and
+  scopes, Prometheus metrics, v1.0 release
 
 ## Contributing
 

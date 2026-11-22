@@ -115,3 +115,31 @@ Committed offsets are set with `kafka-consumer-groups.sh --reset-offsets`,
 so lag does not depend on consumer timing. These dev-only containers write
 to Kafka; StreamSage itself does not. Run `docker compose down -v` to
 reseed from scratch.
+
+## Releasing
+
+Releases are GitHub Releases; nothing is published to package registries.
+
+1. Update the version in `pyproject.toml`; `streamsage.__version__` reads it
+   from the installed package metadata. Run `uv lock`.
+2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a new
+   `## [X.Y.Z] - YYYY-MM-DD` heading, and update the comparison links.
+3. Merge the change into `main` through a pull request.
+4. Tag the merge commit and push the tag:
+
+   ```bash
+   git tag -a vX.Y.Z -m "StreamSage vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+The `Release` workflow (`.github/workflows/release.yml`) then:
+
+- checks that the tag matches the version in `pyproject.toml`;
+- runs lint, type checks and unit tests;
+- builds the sdist and wheel;
+- creates the GitHub Release, with the matching `CHANGELOG.md` section as
+  notes (`scripts/release_notes.py` fails if that section is missing) and
+  the built files attached.
+
+The workflow uses pinned action SHAs, minimal permissions and no cache, and
+passes `zizmor`.
