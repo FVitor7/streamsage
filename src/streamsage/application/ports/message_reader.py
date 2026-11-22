@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from streamsage.domain.entities.message import (
+    KeyScanResult,
     MessageReadResult,
     OffsetRange,
     PartitionOffsets,
@@ -24,4 +25,18 @@ class MessageReader(Protocol):
         self, topic: str, ranges: Sequence[OffsetRange]
     ) -> MessageReadResult:
         """Read the given ranges (and nothing beyond them) within a timeout."""
+        ...
+
+    def find_by_key(
+        self,
+        topic: str,
+        ranges: Sequence[OffsetRange],
+        key: bytes,
+        max_matches_per_partition: int,
+    ) -> KeyScanResult:
+        """Scan the ranges, keeping only messages whose key equals ``key``.
+
+        Non-matching messages must not be retained, so memory is bounded by
+        the number of matches, not the number of messages scanned.
+        """
         ...

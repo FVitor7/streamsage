@@ -20,16 +20,22 @@ from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
 from streamsage.application.use_cases.detect_stalled_partitions import (
     DetectStalledPartitionsUseCase,
 )
+from streamsage.application.use_cases.find_messages_by_key import (
+    FindMessagesByKeyUseCase,
+    KeySearchLimits,
+)
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
+from streamsage.application.use_cases.list_dlq_topics import ListDlqTopicsUseCase
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.domain.diagnostics.catalog import severity_policy
 from streamsage.domain.diagnostics.consumer_health import LagThresholds
 from streamsage.domain.exceptions import ConfigurationError
+from streamsage.domain.messages.dlq import DlqTopicMatcher
 from streamsage.domain.messages.sanitizer import (
     DEFAULT_SENSITIVE_TERMS,
     SanitizationPolicy,
@@ -97,6 +103,20 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
             ),
             inspect_messages_use_case=InspectMessagesUseCase(
                 message_reader, sanitization, settings.message_max_limit
+            ),
+            find_messages_by_key_use_case=FindMessagesByKeyUseCase(
+                message_reader,
+                sanitization,
+                KeySearchLimits(
+                    max_results=settings.message_max_limit,
+                    max_scan_per_partition=settings.message_key_search_max_per_partition,
+                    max_scan_total=settings.message_key_search_max_total,
+                ),
+            ),
+            list_dlq_topics_use_case=ListDlqTopicsUseCase(
+                topic_reader,
+                message_reader,
+                DlqTopicMatcher(settings.dlq_topic_patterns),
             ),
             message_default_limit=settings.message_default_limit,
             message_max_limit=settings.message_max_limit,

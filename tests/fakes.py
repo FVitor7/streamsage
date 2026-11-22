@@ -12,6 +12,7 @@ from streamsage.domain.entities.consumer_group import (
     TopicPartitionRef,
 )
 from streamsage.domain.entities.message import (
+    KeyScanResult,
     MessageReadResult,
     OffsetRange,
     PartitionOffsets,
@@ -231,3 +232,25 @@ class FakeMessageReader:
             if m.partition == r.partition and r.start <= m.offset < r.stop
         )
         return MessageReadResult(messages=selected, complete=self.complete)
+
+    def find_by_key(
+        self,
+        topic: str,
+        ranges: Sequence[OffsetRange],
+        key: bytes,
+        max_matches_per_partition: int,
+    ) -> KeyScanResult:
+        self.requested_ranges.append(tuple(ranges))
+        scanned = [
+            m
+            for m in self.messages
+            for r in ranges
+            if m.partition == r.partition and r.start <= m.offset < r.stop
+        ]
+        matches: list[RawMessage] = []
+        for partition in {r.partition for r in ranges}:
+            found = [m for m in scanned if m.partition == partition and m.key == key]
+            matches.extend(found[-max_matches_per_partition:])
+        return KeyScanResult(
+            matches=tuple(matches), scanned=len(scanned), complete=self.complete
+        )

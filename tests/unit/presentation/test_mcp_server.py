@@ -20,12 +20,17 @@ from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
 from streamsage.application.use_cases.detect_stalled_partitions import (
     DetectStalledPartitionsUseCase,
 )
+from streamsage.application.use_cases.find_messages_by_key import (
+    FindMessagesByKeyUseCase,
+    KeySearchLimits,
+)
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
+from streamsage.application.use_cases.list_dlq_topics import ListDlqTopicsUseCase
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.domain.diagnostics.consumer_health import LagThresholds
 from streamsage.domain.diagnostics.finding import SeverityPolicy
@@ -33,6 +38,7 @@ from streamsage.domain.exceptions import (
     KafkaConnectionError,
     KafkaOperationTimeoutError,
 )
+from streamsage.domain.messages.dlq import DlqTopicMatcher
 from streamsage.domain.messages.sanitizer import SanitizationPolicy
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
@@ -61,9 +67,12 @@ def build(
     policy: SeverityPolicy | None = None,
     message_reader: FakeMessageReader | None = None,
     payloads_enabled: bool = False,
+    dlq_patterns: tuple[str, ...] = (),
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
     group_reader = group_reader or FakeConsumerGroupReader()
+    message_reader = message_reader or FakeMessageReader()
+    sanitization = SanitizationPolicy(payloads_enabled=payloads_enabled)
     return create_server(
         get_cluster_info_use_case=GetClusterInfoUseCase(
             cluster_reader or FakeClusterReader()
@@ -82,9 +91,17 @@ def build(
             group_reader, policy, sleep=lambda _seconds: None
         ),
         inspect_messages_use_case=InspectMessagesUseCase(
-            message_reader or FakeMessageReader(),
-            SanitizationPolicy(payloads_enabled=payloads_enabled),
-            max_messages=50,
+            message_reader, sanitization, max_messages=50
+        ),
+        find_messages_by_key_use_case=FindMessagesByKeyUseCase(
+            message_reader,
+            sanitization,
+            KeySearchLimits(
+                max_results=50, max_scan_per_partition=1_000, max_scan_total=10_000
+            ),
+        ),
+        list_dlq_topics_use_case=ListDlqTopicsUseCase(
+            topic_reader, message_reader, DlqTopicMatcher(dlq_patterns)
         ),
         message_default_limit=5,
         message_max_limit=50,
@@ -118,6 +135,8 @@ async def test_registers_exactly_the_expected_tools_as_read_only(
         "analyze_consumer_health",
         "detect_stalled_partitions",
         "inspect_messages",
+        "find_messages_by_key",
+        "list_dlq_topics",
     }
     for tool in tools.values():
         assert tool.description

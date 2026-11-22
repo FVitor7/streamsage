@@ -9,8 +9,14 @@ import uuid
 
 import pytest
 
+from streamsage.application.use_cases.find_messages_by_key import (
+    FindMessagesByKeyUseCase,
+    KeySearchLimits,
+)
 from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
+from streamsage.application.use_cases.list_dlq_topics import ListDlqTopicsUseCase
 from streamsage.domain.exceptions import InvalidInputError, KafkaResourceNotFoundError
+from streamsage.domain.messages.dlq import DlqTopicMatcher
 from streamsage.domain.messages.sanitizer import (
     REDACTED,
     PayloadTreatment,
@@ -110,3 +116,59 @@ def test_inspection_leaves_no_consumer_group(
         g.group_id for g in KafkaConsumerGroupAdapter(gateway).list_consumer_groups()
     }
     assert INSPECTOR_GROUP_ID not in groups
+
+
+def _key_search(
+    reader: KafkaMessageAdapter, per_partition: int = 1_000, total: int = 10_000
+) -> FindMessagesByKeyUseCase:
+    return FindMessagesByKeyUseCase(
+        reader,
+        SanitizationPolicy(),
+        KeySearchLimits(
+            max_results=20, max_scan_per_partition=per_partition, max_scan_total=total
+        ),
+    )
+
+
+def test_find_messages_by_key_over_the_whole_topic(reader: KafkaMessageAdapter) -> None:
+    result = _key_search(reader).execute("orders.created", "key-288", limit=5)
+    assert [m.key for m in result.matches] == ["key-288"]
+    assert result.scanned == 300
+    assert result.searched_whole_topic is True
+    assert result.notes == ()
+
+
+def test_key_not_found_with_full_coverage(reader: KafkaMessageAdapter) -> None:
+    result = _key_search(reader).execute("orders.created", "no-such-key", limit=5)
+    assert result.matches == ()
+    assert result.searched_whole_topic is True
+
+
+def test_key_search_budget_limits_coverage(reader: KafkaMessageAdapter) -> None:
+    result = _key_search(reader, total=30).execute("orders.created", "key-1", limit=5)
+    assert result.per_partition_limit == 10
+    assert result.scanned == 30
+    assert result.searched_whole_topic is False
+    assert "No match does not mean the key is absent" in result.notes[0]
+
+
+def test_list_dlq_topics(
+    reader: KafkaMessageAdapter, gateway: KafkaAdminGateway
+) -> None:
+    overview = ListDlqTopicsUseCase(
+        KafkaTopicAdapter(gateway), reader, DlqTopicMatcher(["*.DLQ"])
+    ).execute()
+    assert overview.configured is True
+    assert [(t.name, t.message_count) for t in overview.topics] == [
+        ("orders.created.DLQ", 2)
+    ]
+
+
+def test_dlq_messages_expose_error_headers(reader: KafkaMessageAdapter) -> None:
+    result = _use_case(reader, payloads=False).execute("orders.created.DLQ", limit=5)
+    headers = {h.key: h.value for m in result.messages for h in m.headers}
+    assert headers["error.class"] in {
+        "InvalidOrderException",
+        "DeserializationException",
+    }
+    assert "original.offset" in headers

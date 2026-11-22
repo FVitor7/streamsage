@@ -125,3 +125,18 @@ async def test_stdio_server_inspects_messages_safely(
     assert data["message_count"] == 3
     for secret in customer_secrets:
         assert secret not in str(data)
+
+
+@pytest.mark.anyio
+async def test_stdio_server_key_search_and_dlq() -> None:
+    async with Client(_server(STREAMSAGE_DLQ_TOPICS="*.DLQ")) as client:
+        found = await client.call_tool(
+            "find_messages_by_key", {"topic_name": "orders.created", "key": "key-7"}
+        )
+        dlq = await client.call_tool("list_dlq_topics", {})
+    assert found.structured_content is not None
+    assert [m["key"] for m in found.structured_content["matches"]] == ["key-7"]
+    assert dlq.structured_content is not None
+    assert [t["name"] for t in dlq.structured_content["topics"]] == [
+        "orders.created.DLQ"
+    ]

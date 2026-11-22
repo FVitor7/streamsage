@@ -15,9 +15,10 @@ least privilege that M1 needs:
 | Cluster  | `Describe` | Cluster and broker metadata; listing consumer groups   |
 | Topic(s) | `Describe` | Topic and partition metadata; log end offsets for lag  |
 | Group(s) | `Describe` | Describing groups and reading their committed offsets  |
-| Topic(s) | `Read`     | **Only** for `inspect_messages`; omit it to disable message reads |
+| Topic(s) | `Read`     | **Only** for `inspect_messages` and `find_messages_by_key`; omit it to disable message reads |
 
-Without `Read`, every tool except `inspect_messages` works. Topics and groups
+Without `Read`, every tool except `inspect_messages` and
+`find_messages_by_key` works (`list_dlq_topics` only reads offsets). Topics and groups
 the principal cannot describe do not appear in results.
 
 Message inspection uses a consumer with a fixed `group.id`
@@ -93,6 +94,12 @@ to an LLM. Defaults are conservative:
   decoded; only its size is returned.
 - **No logging.** Message keys, headers and payloads are never logged, and
   raw messages do not render their payload even in debug representations.
+
+`find_messages_by_key` applies the same sanitization to its matches. It
+scans at most `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` messages (default
+10,000), split across partitions and capped per partition (default 1,000).
+Non-matching messages are discarded as they are read. Memory is therefore
+bounded by the number of results, not by the number of messages scanned.
 
 Known limits, stated on every response through `payload_treatment`:
 

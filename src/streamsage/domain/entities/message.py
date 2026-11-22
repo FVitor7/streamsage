@@ -82,3 +82,16 @@ class MessageReadResult:
 
     messages: tuple[RawMessage, ...]
     complete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KeyScanResult:
+    """Messages with a given key found while scanning bounded ranges.
+
+    ``scanned`` counts every message read, matching or not. ``matches`` holds
+    at most the requested number of newest matches per partition.
+    """
+
+    matches: tuple[RawMessage, ...]
+    scanned: int
+    complete: bool
