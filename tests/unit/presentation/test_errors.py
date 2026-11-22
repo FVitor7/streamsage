@@ -21,10 +21,11 @@ def _entries(stream: io.StringIO) -> list[dict[str, object]]:
 
 
 def test_success_is_logged(log_stream: io.StringIO) -> None:
-    with operation_boundary("op", ToolError):
+    with operation_boundary("op", ToolError, correlation_id="req-42"):
         pass
     (entry,) = _entries(log_stream)
     assert entry["operation"] == "op"
+    assert entry["correlation_id"] == "req-42"
     assert entry["outcome"] == "success"
     assert entry["error_type"] is None
     assert isinstance(entry["duration_ms"], float)
@@ -39,6 +40,7 @@ def test_known_error_is_converted(log_stream: io.StringIO) -> None:
     assert raised.value.__cause__ is None
     assert raised.value.__suppress_context__ is True
     (entry,) = _entries(log_stream)
+    assert entry["correlation_id"] is None
     assert entry["outcome"] == "error"
     assert entry["error_type"] == "KafkaConnectionError"
 

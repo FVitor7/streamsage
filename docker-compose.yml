@@ -111,8 +111,11 @@ services:
       retries: 24
       start_period: 10s
 
+  # Web UI for browsing the local cluster: http://localhost:8080
+  # kafbat/kafka-ui is the maintained fork of provectus/kafka-ui (unmaintained
+  # since 2024). Pinned like the Kafka image for reproducible builds.
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: kafbat/kafka-ui:v1.5.0
     container_name: streamsage-kafka-ui
     ports:
       - "8080:8080"

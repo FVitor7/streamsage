@@ -1,4 +1,4 @@
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
@@ -20,7 +20,7 @@ def register_cluster_tools(
         ),
         annotations=READ_ONLY,
     )
-    def get_cluster_info() -> ClusterInfoResponse:
-        with operation_boundary("get_cluster_info", ToolError):
+    def get_cluster_info(ctx: Context) -> ClusterInfoResponse:
+        with operation_boundary("get_cluster_info", ToolError, ctx.request_id):
             cluster = get_cluster_info_use_case.execute()
         return ClusterInfoResponse.from_domain(cluster)

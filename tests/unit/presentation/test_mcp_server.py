@@ -1,5 +1,6 @@
 """MCP-level tests: real MCPServer, in-process client, fake readers."""
 
+import io
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -17,6 +18,7 @@ from streamsage.domain.exceptions import (
     KafkaOperationTimeoutError,
 )
 from streamsage.presentation.mcp.server import create_server
+from streamsage.shared.logging import configure_logging
 from tests.fakes import (
     FakeClusterReader,
     FakeTopicReader,
@@ -234,3 +236,39 @@ async def test_investigation_prompt(client: Client) -> None:
         "investigate_kafka_cluster", {"focus_topic": "orders.created"}
     )
     assert "`orders.created`" in focused.messages[0].content.text  # type: ignore[union-attr]
+
+
+@pytest.mark.anyio
+async def test_request_context_is_not_exposed_as_a_tool_argument(
+    client: Client,
+) -> None:
+    for tool in (await client.list_tools()).tools:
+        assert "ctx" not in tool.input_schema.get("properties", {})
+        assert "ctx" not in tool.input_schema.get("required", [])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("get_cluster_info", {}),
+        ("list_topics", {}),
+        ("describe_topic", {"topic_name": "orders.created"}),
+        ("describe_topic", {"topic_name": "missing"}),
+    ],
+)
+async def test_tool_calls_log_a_correlation_id(
+    client: Client, tool: str, arguments: dict[str, Any]
+) -> None:
+    stream = io.StringIO()
+    configure_logging("INFO", stream=stream)
+    await client.call_tool(tool, arguments)
+
+    entries = [
+        entry
+        for entry in map(json.loads, stream.getvalue().splitlines())
+        if entry.get("message") == "mcp operation finished"
+    ]
+    assert [entry["operation"] for entry in entries] == [tool]
+    correlation_id = entries[0]["correlation_id"]
+    assert isinstance(correlation_id, str) and correlation_id
