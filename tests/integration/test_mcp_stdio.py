@@ -70,3 +70,25 @@ async def test_stdio_server_reports_unreachable_cluster_safely() -> None:
     text = " ".join(c.text for c in result.content if isinstance(c, TextContent))
     assert "Could not connect to the Kafka cluster" in text
     assert "Traceback" not in text
+
+
+@pytest.mark.anyio
+async def test_stdio_server_applies_configured_lag_thresholds() -> None:
+    # orders-service has a max partition lag of ~66 messages (seeded data).
+    params = _server(
+        STREAMSAGE_LAG_WARNING_THRESHOLD="10",
+        STREAMSAGE_LAG_CRITICAL_THRESHOLD="60",
+    )
+    async with Client(params) as client:
+        result = await client.call_tool(
+            "analyze_consumer_health", {"group_id": "orders-service"}
+        )
+    assert result.is_error is False
+    data = result.structured_content
+    assert data is not None
+    assert data["status"] == "critical"
+    assert data["thresholds"] == {"warning": 10, "critical": 60}
+    assert [f["code"] for f in data["findings"]] == [
+        "LAG_ABOVE_CRITICAL",
+        "NO_ACTIVE_MEMBERS",
+    ]

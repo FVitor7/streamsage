@@ -138,3 +138,23 @@ def test_unencrypted_remote_connection_detection(
         kafka_security_protocol=protocol,  # type: ignore[arg-type]
     )
     assert settings.uses_unencrypted_remote_connection is expected
+
+
+def test_lag_threshold_defaults_and_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings()
+    assert (settings.lag_warning_threshold, settings.lag_critical_threshold) == (
+        1_000,
+        10_000,
+    )
+    monkeypatch.setenv("STREAMSAGE_LAG_WARNING_THRESHOLD", "50")
+    monkeypatch.setenv("STREAMSAGE_LAG_CRITICAL_THRESHOLD", "50")
+    settings = Settings()
+    assert (settings.lag_warning_threshold, settings.lag_critical_threshold) == (50, 50)
+
+
+@pytest.mark.parametrize(("warning", "critical"), [(0, 10), (100, 99), (10, 0)])
+def test_inconsistent_lag_thresholds_are_rejected(warning: int, critical: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(lag_warning_threshold=warning, lag_critical_threshold=critical)

@@ -7,6 +7,9 @@ serializes results. It holds no Kafka client and no business rules.
 from mcp.server.mcpserver import MCPServer
 
 from streamsage import __version__
+from streamsage.application.use_cases.analyze_consumer_health import (
+    AnalyzeConsumerHealthUseCase,
+)
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
@@ -32,10 +35,11 @@ SERVER_NAME = "streamsage"
 INSTRUCTIONS = """\
 StreamSage exposes read-only Kafka cluster data. Use get_cluster_info,
 list_topics and describe_topic to explore the cluster, and
-list_consumer_groups, describe_consumer_group and get_consumer_lag to inspect
-consumers. No tool can modify the cluster. Distinguish observed data from
-hypotheses. Lag is a single snapshot: high lag alone does not prove a
-consumer is stuck, and metadata alone does not prove the cluster is healthy.
+list_consumer_groups, describe_consumer_group, get_consumer_lag and
+analyze_consumer_health to inspect consumers. No tool can modify the
+cluster. Distinguish observed data from hypotheses. Lag is a single
+snapshot: high lag alone does not prove a consumer is stuck, and metadata
+alone does not prove the cluster is healthy.
 """
 
 
@@ -47,6 +51,7 @@ def create_server(
     list_consumer_groups_use_case: ListConsumerGroupsUseCase,
     describe_consumer_group_use_case: DescribeConsumerGroupUseCase,
     get_consumer_lag_use_case: GetConsumerLagUseCase,
+    analyze_consumer_health_use_case: AnalyzeConsumerHealthUseCase,
     include_internal_topics: bool = False,
 ) -> MCPServer:
     server: MCPServer = MCPServer(
@@ -68,6 +73,7 @@ def create_server(
         list_consumer_groups_use_case,
         describe_consumer_group_use_case,
         get_consumer_lag_use_case,
+        analyze_consumer_health_use_case,
     )
     register_cluster_resources(
         server,

@@ -172,3 +172,51 @@ async def test_lag_tool_description_warns_about_snapshots(client: Client) -> Non
     description = tools["get_consumer_lag"].description or ""
     assert "never 0" in description
     assert "does not prove a consumer is stuck" in description
+
+
+@pytest.mark.anyio
+async def test_analyze_consumer_health(client: Client) -> None:
+    result = await client.call_tool("analyze_consumer_health", {"group_id": "billing"})
+    assert result.is_error is False
+    data = result.structured_content
+    assert data is not None
+    assert data["status"] == "warning"
+    assert data["state"] == "stable"
+    assert data["member_count"] == 1
+    assert (data["total_lag"], data["max_lag"]) == (70, 60)
+    assert data["thresholds"] == {"warning": 50, "critical": 500}
+    assert [f["code"] for f in data["findings"]] == [
+        "LAG_ABOVE_WARNING",
+        "UNASSIGNED_PARTITIONS_WITH_LAG",
+        "LAG_UNKNOWN",
+    ]
+    assert data["findings"][0] == {
+        "code": "LAG_ABOVE_WARNING",
+        "severity": "warning",
+        "summary": (
+            "1 partition(s) have lag at or above the warning threshold of 50 messages."
+        ),
+        "evidence": [
+            {"label": "max_lag", "value": 60},
+            {"label": "payments[0].lag", "value": 60},
+        ],
+    }
+    assert any("single snapshot" in text for text in data["limitations"])
+
+
+@pytest.mark.anyio
+async def test_analyze_consumer_health_uses_configured_thresholds() -> None:
+    from streamsage.domain.diagnostics.consumer_health import LagThresholds
+
+    thresholds = LagThresholds(warning=10, critical=60)
+    async with Client(build(thresholds=thresholds)) as c:
+        result = await c.call_tool("analyze_consumer_health", {"group_id": "billing"})
+    assert result.structured_content is not None
+    assert result.structured_content["status"] == "critical"
+
+
+@pytest.mark.anyio
+async def test_analyze_missing_group_is_controlled_error(client: Client) -> None:
+    result = await client.call_tool("analyze_consumer_health", {"group_id": "ghost"})
+    assert result.is_error is True
+    assert "Consumer group 'ghost' does not exist." in _text(result)

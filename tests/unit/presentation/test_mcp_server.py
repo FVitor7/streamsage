@@ -10,6 +10,9 @@ from mcp import Client
 from mcp.shared.exceptions import MCPError
 from mcp.types import TextContent
 
+from streamsage.application.use_cases.analyze_consumer_health import (
+    AnalyzeConsumerHealthUseCase,
+)
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
@@ -20,6 +23,7 @@ from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
+from streamsage.domain.diagnostics.consumer_health import LagThresholds
 from streamsage.domain.exceptions import (
     KafkaConnectionError,
     KafkaOperationTimeoutError,
@@ -46,6 +50,7 @@ def build(
     topic_reader: FakeTopicReader | None = None,
     include_internal_topics: bool = False,
     group_reader: FakeConsumerGroupReader | None = None,
+    thresholds: LagThresholds | None = None,
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
     group_reader = group_reader or FakeConsumerGroupReader()
@@ -58,6 +63,9 @@ def build(
         list_consumer_groups_use_case=ListConsumerGroupsUseCase(group_reader),
         describe_consumer_group_use_case=DescribeConsumerGroupUseCase(group_reader),
         get_consumer_lag_use_case=GetConsumerLagUseCase(group_reader),
+        analyze_consumer_health_use_case=AnalyzeConsumerHealthUseCase(
+            group_reader, thresholds or LagThresholds(warning=50, critical=500)
+        ),
         include_internal_topics=include_internal_topics,
     )
 
@@ -84,6 +92,7 @@ async def test_registers_exactly_the_expected_tools_as_read_only(
         "list_consumer_groups",
         "describe_consumer_group",
         "get_consumer_lag",
+        "analyze_consumer_health",
     }
     for tool in tools.values():
         assert tool.description
