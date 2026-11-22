@@ -71,6 +71,38 @@ librdkafka's event queue after each request, and translates errors, mapping
 prefix, for example `__consumer_offsets`) are treated as internal.
 `describe_topic` uses the `is_internal` flag returned by DescribeTopics.
 
+**Consumer lag.** `get_consumer_lag` combines three reads:
+DescribeConsumerGroups (state, members, assignment),
+ListConsumerGroupOffsets (committed offsets) and ListOffsets with
+`OffsetSpec.latest()` (log end offsets). It covers every partition the group
+has committed *or* is currently assigned. That way a partition that is
+assigned but has never been committed shows up with `lag: null`, instead of
+being silently omitted. Rules:
+
+- Unknown committed or end offsets give `lag: null`, never 0. `total_lag`
+  sums only known lags, and `unknown_lag_partition_count` reports the rest.
+- The end offset is the high watermark (read_uncommitted). For consumers
+  using `isolation.level=read_committed`, lag may be overstated while
+  transactions are open.
+- Offsets are read at slightly different moments, so a committed offset
+  ahead of the read end offset yields 0 rather than a negative lag.
+- A per-partition failure (for example a deleted partition) yields
+  `log_end_offset: null` for that partition only. A connection,
+  authentication or timeout failure fails the whole call, because partial
+  results would mislead.
+- Kafka answers DescribeGroups for an unknown id with an empty group in
+  state `DEAD`, not an error. StreamSage reports that as "does not exist".
+- If some brokers fail to answer a group listing, the groups that were
+  returned are still listed and a warning is logged. If all brokers fail,
+  the call fails.
+
+**Stalled partitions are an M3 feature.** The spec's M2 tool table lists
+`detect_stalled_partitions`, but proving that a consumer is not progressing
+requires comparing offsets at more than one point in time (spec, M3), and M2
+has no persistence or background sampling. Lag is a single snapshot, and high
+lag alone does not prove a stall. The tool is therefore deferred to M3, where
+offset snapshots are introduced.
+
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The
 field is documented as such in the tool's output schema.

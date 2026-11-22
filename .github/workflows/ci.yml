@@ -47,8 +47,10 @@ jobs:
       - run: uv sync --locked
       - name: Start Kafka
         run: docker compose up -d --wait kafka
-      - name: Create sample topics
+      - name: Seed sample topics, messages and consumer groups
         run: docker compose run --rm kafka-init
+      - name: Start the sample consumer (active consumer group)
+        run: docker compose up -d kafka-consumer
       # Generates a throwaway CA, broker keystore and SCRAM password for this
       # run only; nothing secret is stored in the repository.
       - name: Start secured Kafka (SASL/SCRAM + TLS)

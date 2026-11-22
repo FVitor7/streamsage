@@ -11,7 +11,7 @@ rules to every request:
 
 import concurrent.futures
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Mapping
 from typing import TypeVar
 
 from confluent_kafka import KafkaError, KafkaException
@@ -19,6 +19,7 @@ from confluent_kafka.admin import AdminClient
 from confluent_kafka.admin._metadata import ClusterMetadata
 
 from streamsage.domain.exceptions import (
+    KafkaConnectionError,
     KafkaOperationTimeoutError,
     KafkaResourceNotFoundError,
     StreamSageError,
@@ -29,6 +30,7 @@ from streamsage.infrastructure.kafka.errors import translate_kafka_exception
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+K = TypeVar("K", bound=Hashable)
 
 # Error codes meaning "the requested resource does not exist".
 NOT_FOUND_CODES = frozenset(
@@ -39,6 +41,9 @@ NOT_FOUND_CODES = frozenset(
 _FUTURE_GRACE_SECONDS = 5.0
 
 RequestStarter = Callable[[AdminClient, float], concurrent.futures.Future[T]]
+MultiRequestStarter = Callable[
+    [AdminClient, float], Mapping[K, concurrent.futures.Future[T]]
+]
 
 
 class KafkaAdminGateway:
@@ -101,6 +106,42 @@ class KafkaAdminGateway:
             ) from exc
         self._after_success()
         return result
+
+    def request_each(
+        self, operation: str, start: MultiRequestStarter[K, T]
+    ) -> dict[K, T | None]:
+        """Run an admin request that returns one future per key.
+
+        A failure that only concerns one key (for example an unknown
+        partition) yields ``None`` for that key. A failure of the request as
+        a whole (connection, authentication, TLS or timeout) is raised, since
+        partial results would be misleading.
+        """
+        deadline_seconds = self._timeout_seconds + _FUTURE_GRACE_SECONDS
+        results: dict[K, T | None] = {}
+        try:
+            futures = start(self._admin_client, self._timeout_seconds)
+            for key, future in futures.items():
+                try:
+                    results[key] = future.result(timeout=deadline_seconds)
+                except KafkaException as exc:
+                    failure = translate_kafka_exception(
+                        exc, operation=operation, timeout_seconds=self._timeout_seconds
+                    )
+                    if isinstance(
+                        failure, KafkaConnectionError | KafkaOperationTimeoutError
+                    ):
+                        raise
+                    results[key] = None
+        except KafkaException as exc:
+            raise self._failure(exc, operation) from exc
+        except concurrent.futures.TimeoutError as exc:
+            self._drain()
+            raise KafkaOperationTimeoutError(
+                f"Kafka {operation} timed out after {self._timeout_seconds:g}s."
+            ) from exc
+        self._after_success()
+        return results
 
     def _failure(self, exc: KafkaException, operation: str) -> StreamSageError:
         self._drain()

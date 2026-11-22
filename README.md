@@ -7,8 +7,9 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M1 — Foundation & Cluster Explorer.** Consumer groups, lag and
-> diagnostics are on the [roadmap](#roadmap).
+> Status: **M2 — Consumer Intelligence** in progress. Consumer groups and lag
+> are available; health analysis and diagnostics are on the
+> [roadmap](#roadmap).
 
 ## Why
 
@@ -21,13 +22,16 @@ tools and reasons over the results.
 The server does not call any LLM. It returns data, and in later milestones it
 will also return deterministic, evidence-based diagnostics.
 
-## Features (M1)
+## Features
 
 | Kind     | Name                        | Description                                                     |
 | -------- | --------------------------- | --------------------------------------------------------------- |
 | Tool     | `get_cluster_info`          | Cluster id, brokers (id/host/port), controller id               |
 | Tool     | `list_topics`               | Topics with partition count and replication factor; `include_internal: bool` |
 | Tool     | `describe_topic`            | Per-partition leader, replicas and ISR; under-replicated/leaderless counts |
+| Tool     | `list_consumer_groups`      | Consumer groups with their state; optional `states` filter      |
+| Tool     | `describe_consumer_group`   | State, assignor, coordinator, members and their partitions      |
+| Tool     | `get_consumer_lag`          | Per-partition lag, largest first, with total/max lag; `max_partitions` |
 | Resource | `kafka://cluster/info`      | Cluster info as JSON                                            |
 | Resource | `kafka://topics`            | Topic list as JSON                                              |
 | Prompt   | `investigate_kafka_cluster` | Guided, evidence-based investigation (optional `focus_topic`)   |
@@ -36,6 +40,11 @@ Every tool has a typed input schema and structured output, and is annotated
 `readOnlyHint: true`. Internal topics (`__*`) are hidden by default.
 `describe_topic` never creates topics, even on brokers that have
 auto-creation enabled; the integration tests verify this.
+
+Lag is reported per partition as `log_end_offset - committed_offset`. A
+partition the group has never committed has `lag: null`. StreamSage never
+reports unknown lag as 0. Lag is a single snapshot: high lag alone does not
+prove a consumer is stuck.
 
 ## Architecture
 
@@ -155,8 +164,9 @@ Claude Code:
 claude mcp add streamsage -- uv run --directory /absolute/path/to/streamsage streamsage
 ```
 
-Then ask things like *"What topics are available in this cluster?"* or
-*"Investigate the `orders.created` topic."*
+Then ask things like *"What topics are available in this cluster?"*,
+*"Which consumer groups have the highest lag?"* or *"Investigate the
+`orders.created` topic."*
 
 ## Security model
 
@@ -189,8 +199,11 @@ excluded by default. See [docs/development.md](docs/development.md).
 ## Roadmap
 
 - **M1 — Foundation & Cluster Explorer** ✅ cluster info, topics, partitions
-- **M2 — Consumer Intelligence**: consumer groups, committed/end offsets, lag
-- **M3 — Diagnostics Engine**: structured, evidence-based findings; stalled-partition detection via snapshots
+- **M2 — Consumer Intelligence**: consumer groups and lag ✅; health analysis
+  with configurable thresholds next
+- **M3 — Diagnostics Engine**: structured, evidence-based findings;
+  stalled-partition detection (`detect_stalled_partitions`) by comparing
+  offset snapshots over time
 - **M4 — Message Intelligence**: bounded, sanitized message inspection
 - **M5 — Production Readiness**: Streamable HTTP with auth, metrics, v1.0
 

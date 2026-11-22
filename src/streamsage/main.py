@@ -9,8 +9,15 @@ from typing import NoReturn
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
+from streamsage.application.use_cases.describe_consumer_group import (
+    DescribeConsumerGroupUseCase,
+)
 from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
+from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
+from streamsage.application.use_cases.list_consumer_groups import (
+    ListConsumerGroupsUseCase,
+)
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.domain.exceptions import ConfigurationError
 from streamsage.infrastructure.config.settings import Settings
@@ -18,6 +25,9 @@ from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
+from streamsage.infrastructure.kafka.kafka_consumer_group_adapter import (
+    KafkaConsumerGroupAdapter,
+)
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
@@ -39,10 +49,14 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
         )
         topic_reader = KafkaTopicAdapter(gateway)
         cluster_reader = KafkaClusterAdapter(gateway)
+        group_reader = KafkaConsumerGroupAdapter(gateway)
         yield create_server(
             get_cluster_info_use_case=GetClusterInfoUseCase(cluster_reader),
             list_topics_use_case=ListTopicsUseCase(topic_reader),
             describe_topic_use_case=DescribeTopicUseCase(topic_reader),
+            list_consumer_groups_use_case=ListConsumerGroupsUseCase(group_reader),
+            describe_consumer_group_use_case=DescribeConsumerGroupUseCase(group_reader),
+            get_consumer_lag_use_case=GetConsumerLagUseCase(group_reader),
             include_internal_topics=settings.include_internal_topics,
         )
 

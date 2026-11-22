@@ -10,14 +10,14 @@ write-style methods.
 Do not rely on the code alone. Give StreamSage a Kafka principal with the
 least privilege that M1 needs:
 
-| Resource | Operation  | Why                          |
-| -------- | ---------- | ---------------------------- |
-| Cluster  | `Describe` | Cluster and broker metadata  |
-| Topic(s) | `Describe` | Topic and partition metadata |
+| Resource | Operation  | Why                                                    |
+| -------- | ---------- | ------------------------------------------------------ |
+| Cluster  | `Describe` | Cluster and broker metadata; listing consumer groups   |
+| Topic(s) | `Describe` | Topic and partition metadata; log end offsets for lag  |
+| Group(s) | `Describe` | Describing groups and reading their committed offsets  |
 
-Topics the principal cannot describe do not appear in results. Later
-milestones (consumer groups, lag) will need `Describe` on groups and will be
-documented when added.
+No `Read` permission is needed: StreamSage reads offsets, never messages.
+Topics and groups the principal cannot describe do not appear in results.
 
 ## Credentials
 

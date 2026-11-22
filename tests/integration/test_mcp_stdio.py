@@ -27,7 +27,8 @@ def _server(**env: str) -> StdioServerParameters:
 async def test_stdio_server_serves_tools_against_real_kafka() -> None:
     async with Client(_server()) as client:
         tools = {tool.name for tool in (await client.list_tools()).tools}
-        assert tools == {"get_cluster_info", "list_topics", "describe_topic"}
+        assert {"get_cluster_info", "list_topics", "describe_topic"} <= tools
+        assert {"list_consumer_groups", "get_consumer_lag"} <= tools
 
         info = await client.call_tool("get_cluster_info", {})
         assert info.is_error is False
@@ -48,6 +49,11 @@ async def test_stdio_server_serves_tools_against_real_kafka() -> None:
 
         resource = await client.read_resource("kafka://cluster/info")
         assert resource.contents
+
+        lag = await client.call_tool("get_consumer_lag", {"group_id": "orders-service"})
+        assert lag.is_error is False
+        assert lag.structured_content is not None
+        assert lag.structured_content["total_lag"] == 180
 
 
 @pytest.mark.anyio

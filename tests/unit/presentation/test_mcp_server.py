@@ -10,8 +10,15 @@ from mcp import Client
 from mcp.shared.exceptions import MCPError
 from mcp.types import TextContent
 
+from streamsage.application.use_cases.describe_consumer_group import (
+    DescribeConsumerGroupUseCase,
+)
 from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
+from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
+from streamsage.application.use_cases.list_consumer_groups import (
+    ListConsumerGroupsUseCase,
+)
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.domain.exceptions import (
     KafkaConnectionError,
@@ -21,6 +28,7 @@ from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
 from tests.fakes import (
     FakeClusterReader,
+    FakeConsumerGroupReader,
     FakeTopicReader,
     make_topic,
     random_credential,
@@ -37,14 +45,19 @@ def build(
     cluster_reader: FakeClusterReader | None = None,
     topic_reader: FakeTopicReader | None = None,
     include_internal_topics: bool = False,
+    group_reader: FakeConsumerGroupReader | None = None,
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
+    group_reader = group_reader or FakeConsumerGroupReader()
     return create_server(
         get_cluster_info_use_case=GetClusterInfoUseCase(
             cluster_reader or FakeClusterReader()
         ),
         list_topics_use_case=ListTopicsUseCase(topic_reader),
         describe_topic_use_case=DescribeTopicUseCase(topic_reader),
+        list_consumer_groups_use_case=ListConsumerGroupsUseCase(group_reader),
+        describe_consumer_group_use_case=DescribeConsumerGroupUseCase(group_reader),
+        get_consumer_lag_use_case=GetConsumerLagUseCase(group_reader),
         include_internal_topics=include_internal_topics,
     )
 
@@ -60,9 +73,18 @@ def _text(result: Any) -> str:
 
 
 @pytest.mark.anyio
-async def test_registers_exactly_the_m1_tools_as_read_only(client: Client) -> None:
+async def test_registers_exactly_the_expected_tools_as_read_only(
+    client: Client,
+) -> None:
     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-    assert set(tools) == {"get_cluster_info", "list_topics", "describe_topic"}
+    assert set(tools) == {
+        "get_cluster_info",
+        "list_topics",
+        "describe_topic",
+        "list_consumer_groups",
+        "describe_consumer_group",
+        "get_consumer_lag",
+    }
     for tool in tools.values():
         assert tool.description
         assert tool.output_schema is not None

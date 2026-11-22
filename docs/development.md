@@ -94,7 +94,22 @@ broker/controller in KRaft mode:
 - `auto.create.topics.enable=true` on purpose, so tests can prove that
   StreamSage never creates topics.
 
-`docker/kafka/init-topics.sh` creates `orders.created` (3 partitions),
-`payments.processed` (2) and `inventory.updated` (1). It also briefly joins a
-consumer group so that `__consumer_offsets` exists. This dev-only container
-performs writes; StreamSage itself does not.
+`docker/kafka/init-topics.sh` seeds deterministic sample data, once per
+data volume:
+
+| Topic                | Partitions | Messages |
+| -------------------- | ---------- | -------- |
+| `orders.created`     | 3          | 300      |
+| `payments.processed` | 2          | 50       |
+| `inventory.updated`  | 1          | 20       |
+
+| Consumer group      | State         | Lag                                                   |
+| ------------------- | ------------- | ----------------------------------------------------- |
+| `orders-service`    | empty         | committed offset 40 on every partition → total 180    |
+| `payments-service`  | empty         | 0 (caught up)                                         |
+| `inventory-service` | stable        | 0; consumed continuously by the `kafka-consumer` service |
+
+Committed offsets are set with `kafka-consumer-groups.sh --reset-offsets`,
+so lag does not depend on consumer timing. These dev-only containers write
+to Kafka; StreamSage itself does not. Run `docker compose down -v` to
+reseed from scratch.

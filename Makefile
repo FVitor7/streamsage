@@ -28,6 +28,7 @@ check: lint typecheck test
 kafka-up:
 	docker compose up -d --wait kafka
 	docker compose run --rm kafka-init
+	docker compose up -d kafka-consumer kafka-ui
 
 kafka-down:
 	docker compose down
