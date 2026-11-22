@@ -4,6 +4,7 @@ Credentials are configured once, by the operator, through the environment.
 MCP clients can never supply or override Kafka credentials per tool call.
 """
 
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -100,6 +101,11 @@ class Settings(BaseSettings):
                 "STREAMSAGE_KAFKA_SSL_CA_LOCATION requires kafka_security_protocol "
                 "SSL or SASL_SSL"
             )
+        if (
+            self.kafka_ssl_ca_location
+            and not Path(self.kafka_ssl_ca_location).is_file()
+        ):
+            raise ValueError("STREAMSAGE_KAFKA_SSL_CA_LOCATION is not a readable file")
         return self
 
     @property

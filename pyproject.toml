@@ -33,10 +33,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Integration tests need a running Kafka broker; run them with `-m integration`.
-addopts = "-ra --strict-markers -m 'not integration'"
+# Tests needing Docker brokers are opt-in: `-m integration` / `-m security`.
+addopts = "-ra --strict-markers -m 'not integration and not security'"
 markers = [
     "integration: requires a real Kafka broker (docker compose up)",
+    "security: requires the secured SASL/TLS broker (docker/kafka-secure/setup.sh)",
 ]
 
 [tool.ruff]

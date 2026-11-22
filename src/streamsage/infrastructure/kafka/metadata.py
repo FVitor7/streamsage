@@ -6,6 +6,7 @@ from confluent_kafka import KafkaException
 from confluent_kafka.admin import AdminClient
 from confluent_kafka.admin._metadata import ClusterMetadata
 
+from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.errors import translate_kafka_exception
 
 logger = logging.getLogger(__name__)
@@ -16,20 +17,33 @@ class KafkaMetadataSource:
 
     Metadata is always requested for *all* topics (no topic argument). A
     request scoped to a specific topic name can trigger topic auto-creation
-    on brokers with ``auto.create.topics.enable=true`` depending on client
-    configuration, so StreamSage never issues one.
+    on brokers with ``auto.create.topics.enable=true``, so StreamSage never
+    issues one.
+
+    ``error_events`` must be the collector registered as the client's
+    ``error_cb`` (see ``KafkaAdminClientFactory``).
     """
 
-    def __init__(self, admin_client: AdminClient, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        admin_client: AdminClient,
+        timeout_seconds: float,
+        error_events: KafkaErrorEvents,
+    ) -> None:
         self._admin_client = admin_client
         self._timeout_seconds = timeout_seconds
+        self._error_events = error_events
 
     def fetch(self, operation: str) -> ClusterMetadata:
         try:
-            return self._admin_client.list_topics(timeout=self._timeout_seconds)
+            metadata = self._admin_client.list_topics(timeout=self._timeout_seconds)
         except KafkaException as exc:
+            self._drain_client_events()
             translated = translate_kafka_exception(
-                exc, operation=operation, timeout_seconds=self._timeout_seconds
+                exc,
+                operation=operation,
+                timeout_seconds=self._timeout_seconds,
+                observed_codes=self._error_events.take_codes(),
             )
             logger.warning(
                 "kafka metadata request failed",
@@ -42,3 +56,13 @@ class KafkaMetadataSource:
                 },
             )
             raise translated from exc
+        self._drain_client_events()
+        self._error_events.take_codes()  # discard events from before this success
+        return metadata
+
+    def _drain_client_events(self) -> None:
+        # librdkafka queues logs and error events until the application polls.
+        # Polling after every request delivers them (logs reach Python logging,
+        # errors reach KafkaErrorEvents) and keeps the queue from growing while
+        # a broker is unreachable.
+        self._admin_client.poll(0)

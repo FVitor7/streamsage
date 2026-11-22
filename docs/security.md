@@ -38,6 +38,15 @@ documented when added.
   `STREAMSAGE_KAFKA_SSL_CA_LOCATION` only if the brokers use a private CA.
 - Supported SASL mechanisms: `PLAIN`, `SCRAM-SHA-256` and `SCRAM-SHA-512`.
   `GSSAPI` and `OAUTHBEARER` are not supported yet.
+- SCRAM over `SASL_PLAINTEXT` and `SASL_SSL` is tested against a real broker
+  (`tests/security`, see [development.md](development.md)).
+- `STREAMSAGE_KAFKA_SSL_CA_LOCATION` must point to an existing file; the
+  server refuses to start otherwise. If librdkafka rejects the security
+  configuration, the server exits with code 2 and a message that names only
+  the error code.
+- A wrong password is reported as "Authentication with the Kafka cluster
+  failed", and an untrusted broker certificate as "TLS handshake ... failed".
+  Neither message includes credentials or raw library output.
 
 ## MCP trust considerations
 

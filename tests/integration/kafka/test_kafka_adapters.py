@@ -12,6 +12,7 @@ from streamsage.domain.exceptions import (
 )
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
+from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
 from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
@@ -85,8 +86,11 @@ def test_unreachable_broker_fails_fast_with_controlled_error() -> None:
         kafka_request_timeout=2,
         kafka_socket_timeout=2,
     )
-    with KafkaAdminClientFactory(settings).create() as client:
-        adapter = KafkaClusterAdapter(KafkaMetadataSource(client, timeout_seconds=2))
+    events = KafkaErrorEvents()
+    with KafkaAdminClientFactory(settings).create(events) as client:
+        adapter = KafkaClusterAdapter(
+            KafkaMetadataSource(client, timeout_seconds=2, error_events=events)
+        )
         started = time.monotonic()
         with pytest.raises(KafkaConnectionError, match="waited up to 2s"):
             adapter.get_cluster_info()

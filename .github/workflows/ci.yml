@@ -49,10 +49,15 @@ jobs:
         run: docker compose up -d --wait kafka
       - name: Create sample topics
         run: docker compose run --rm kafka-init
-      - run: uv run pytest -m integration --junitxml=junit-integration.xml
+      # Generates a throwaway CA, broker keystore and SCRAM password for this
+      # run only; nothing secret is stored in the repository.
+      - name: Start secured Kafka (SASL/SCRAM + TLS)
+        run: docker/kafka-secure/setup.sh
+      - name: Integration and security tests
+        run: uv run pytest -m "integration or security" --junitxml=junit-integration.xml
       - name: Kafka logs on failure
         if: failure()
-        run: docker compose logs kafka
+        run: docker compose --profile security logs kafka kafka-secure
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
@@ -61,4 +66,4 @@ jobs:
           path: junit-integration.xml
       - name: Stop Kafka
         if: always()
-        run: docker compose down -v
+        run: docker compose --profile security down -v
