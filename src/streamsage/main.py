@@ -4,6 +4,7 @@ import logging
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import NoReturn
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
@@ -11,8 +12,10 @@ from pydantic import ValidationError
 from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
+from streamsage.domain.exceptions import ConfigurationError
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
+from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
 from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
@@ -27,9 +30,12 @@ EXIT_CONFIG_ERROR = 2
 @contextmanager
 def build_application(settings: Settings) -> Iterator[MCPServer]:
     """Yield a fully wired server; the Kafka client is closed on exit."""
-    with KafkaAdminClientFactory(settings).create() as admin_client:
+    error_events = KafkaErrorEvents()
+    with KafkaAdminClientFactory(settings).create(error_events) as admin_client:
         metadata_source = KafkaMetadataSource(
-            admin_client, timeout_seconds=settings.kafka_request_timeout
+            admin_client,
+            timeout_seconds=settings.kafka_request_timeout,
+            error_events=error_events,
         )
         topic_reader = KafkaTopicAdapter(metadata_source)
         cluster_reader = KafkaClusterAdapter(metadata_source)
@@ -52,8 +58,12 @@ def load_settings() -> Settings:
             f"{'.'.join(str(p) for p in err['loc']) or 'settings'}: {err['msg']}"
             for err in exc.errors(include_input=False, include_url=False)
         )
-        print(f"streamsage: invalid configuration: {details}", file=sys.stderr)
-        raise SystemExit(EXIT_CONFIG_ERROR) from None
+        _exit_with_config_error(details)
+
+
+def _exit_with_config_error(details: str) -> NoReturn:
+    print(f"streamsage: invalid configuration: {details}", file=sys.stderr)
+    raise SystemExit(EXIT_CONFIG_ERROR) from None
 
 
 def main() -> None:
@@ -73,8 +83,11 @@ def main() -> None:
             }
         },
     )
-    with build_application(settings) as server:
-        server.run("stdio")
+    try:
+        with build_application(settings) as server:
+            server.run("stdio")
+    except ConfigurationError as exc:
+        _exit_with_config_error(str(exc))
     logger.info("streamsage stopped")
 
 

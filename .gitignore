@@ -27,3 +27,6 @@ junit*.xml
 .idea/
 .vscode/
 .DS_Store
+
+# Generated TLS/SASL material for the dev-only secured broker
+docker/kafka-secure/.generated/

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -81,15 +83,21 @@ def test_credentials_without_sasl_protocol_are_rejected() -> None:
         Settings(kafka_sasl_username="u")
 
 
-def test_ca_location_requires_tls_protocol() -> None:
+def test_ca_location_requires_tls_protocol(tmp_path: Path) -> None:
+    ca_file = tmp_path / "ca.pem"
+    ca_file.write_text("test")
     with pytest.raises(ValidationError, match="SSL_CA_LOCATION"):
-        Settings(kafka_ssl_ca_location="/etc/ca.pem")
-    assert (
-        Settings(
-            kafka_security_protocol="SSL", kafka_ssl_ca_location="/etc/ca.pem"
-        ).kafka_ssl_ca_location
-        == "/etc/ca.pem"
+        Settings(kafka_ssl_ca_location=str(ca_file))
+    settings = Settings(
+        kafka_security_protocol="SSL", kafka_ssl_ca_location=str(ca_file)
     )
+    assert settings.kafka_ssl_ca_location == str(ca_file)
+
+
+def test_ca_location_must_be_an_existing_file(tmp_path: Path) -> None:
+    for location in (tmp_path / "missing.pem", tmp_path):
+        with pytest.raises(ValidationError, match="not a readable file"):
+            Settings(kafka_security_protocol="SSL", kafka_ssl_ca_location=str(location))
 
 
 @pytest.mark.parametrize(

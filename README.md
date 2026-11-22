@@ -176,6 +176,8 @@ See [docs/security.md](docs/security.md).
 make check             # ruff lint + format check, mypy (strict), unit tests with coverage
 make kafka-up          # start Kafka and create sample topics
 make test-integration  # tests against the real broker, including an end-to-end stdio test
+make kafka-secure-up   # secured broker (SASL/SCRAM + TLS) with generated test credentials
+make test-security     # SASL/TLS tests, including stdio over SASL_SSL
 ```
 
 Unit tests need no broker; integration tests are marked `integration` and are

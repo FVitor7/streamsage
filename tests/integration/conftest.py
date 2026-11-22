@@ -14,6 +14,7 @@ from confluent_kafka.admin import AdminClient
 
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
+from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
 
 BOOTSTRAP = os.environ.get("STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -27,18 +28,27 @@ def kafka_settings() -> Settings:
 
 
 @pytest.fixture(scope="session")
-def admin_client(kafka_settings: Settings) -> Iterator[AdminClient]:
-    with KafkaAdminClientFactory(kafka_settings).create() as client:
+def error_events() -> KafkaErrorEvents:
+    return KafkaErrorEvents()
+
+
+@pytest.fixture(scope="session")
+def admin_client(
+    kafka_settings: Settings, error_events: KafkaErrorEvents
+) -> Iterator[AdminClient]:
+    with KafkaAdminClientFactory(kafka_settings).create(error_events) as client:
         _wait_until_ready(client)
         yield client
 
 
 @pytest.fixture
 def metadata_source(
-    admin_client: AdminClient, kafka_settings: Settings
+    admin_client: AdminClient, kafka_settings: Settings, error_events: KafkaErrorEvents
 ) -> KafkaMetadataSource:
     return KafkaMetadataSource(
-        admin_client, timeout_seconds=kafka_settings.kafka_request_timeout
+        admin_client,
+        timeout_seconds=kafka_settings.kafka_request_timeout,
+        error_events=error_events,
     )
 
 

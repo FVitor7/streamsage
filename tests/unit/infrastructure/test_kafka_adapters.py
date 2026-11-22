@@ -16,6 +16,7 @@ from streamsage.domain.exceptions import (
     KafkaConnectionError,
     KafkaResourceNotFoundError,
 )
+from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
 from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
@@ -64,12 +65,30 @@ def _metadata(
 
 
 class FakeAdminClient:
+    """Mimics AdminClient: queued error events are delivered on poll()."""
+
     def __init__(
-        self, metadata: ClusterMetadata | None = None, error: Exception | None = None
+        self,
+        metadata: ClusterMetadata | None = None,
+        error: Exception | None = None,
+        queued_events: list[KafkaError] | None = None,
     ) -> None:
         self.metadata = metadata or _metadata()
         self.error = error
         self.calls: list[dict[str, Any]] = []
+        self.queued_events = list(queued_events or [])
+        self.error_events: KafkaErrorEvents | None = None
+        self.polls = 0
+
+    def poll(self, timeout: float) -> int:
+        assert timeout == 0, "polling must never block"
+        self.polls += 1
+        delivered = len(self.queued_events)
+        if self.error_events is not None:
+            for event in self.queued_events:
+                self.error_events.record(event)
+        self.queued_events.clear()
+        return delivered
 
     def list_topics(self, *args: Any, **kwargs: Any) -> ClusterMetadata:
         self.calls.append({"args": args, "kwargs": kwargs})
@@ -79,7 +98,12 @@ class FakeAdminClient:
 
 
 def _source(admin: FakeAdminClient, timeout: float = 4) -> KafkaMetadataSource:
-    return KafkaMetadataSource(admin, timeout_seconds=timeout)  # type: ignore[arg-type]
+    admin.error_events = KafkaErrorEvents()
+    return KafkaMetadataSource(
+        admin,  # type: ignore[arg-type]
+        timeout_seconds=timeout,
+        error_events=admin.error_events,
+    )
 
 
 def test_cluster_adapter_maps_metadata() -> None:
@@ -163,3 +187,42 @@ def test_kafka_exceptions_are_translated() -> None:
         KafkaTopicAdapter(_source(admin)).list_topics()
     with pytest.raises(KafkaConnectionError):
         KafkaClusterAdapter(_source(admin)).get_cluster_info()
+
+
+def test_client_events_are_drained_after_success_and_failure() -> None:
+    admin = FakeAdminClient(queued_events=[KafkaError(KafkaError._TRANSPORT)])
+    KafkaClusterAdapter(_source(admin)).get_cluster_info()
+    assert admin.polls == 1
+
+    admin.error = KafkaException(KafkaError(KafkaError._TRANSPORT))
+    with pytest.raises(KafkaConnectionError):
+        KafkaClusterAdapter(_source(admin)).get_cluster_info()
+    assert admin.polls == 2
+
+
+@pytest.mark.parametrize(
+    "event,expected_text",
+    [
+        (KafkaError._AUTHENTICATION, "Authentication with the Kafka cluster failed"),
+        (KafkaError._SSL, "TLS handshake"),
+    ],
+)
+def test_failure_cause_comes_from_client_error_events(
+    event: int, expected_text: str
+) -> None:
+    admin = FakeAdminClient(
+        error=KafkaException(KafkaError(KafkaError._TRANSPORT)),
+        queued_events=[KafkaError(event), KafkaError(KafkaError._ALL_BROKERS_DOWN)],
+    )
+    with pytest.raises(KafkaConnectionError, match=expected_text):
+        KafkaTopicAdapter(_source(admin)).list_topics()
+
+
+def test_events_from_before_a_success_do_not_leak_into_later_errors() -> None:
+    admin = FakeAdminClient(queued_events=[KafkaError(KafkaError._AUTHENTICATION)])
+    source = _source(admin)
+    KafkaClusterAdapter(source).get_cluster_info()  # drains the old event
+
+    admin.error = KafkaException(KafkaError(KafkaError._TRANSPORT))
+    with pytest.raises(KafkaConnectionError, match="Could not connect"):
+        KafkaClusterAdapter(source).get_cluster_info()

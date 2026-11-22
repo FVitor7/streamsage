@@ -34,6 +34,7 @@ uv run pytest --cov     # unit + contract + MCP tests; branch coverage ≥ 80%
 | `tests/unit/presentation`   | MCP server in-process: tools, schemas, errors, resources, prompt | no |
 | `tests/contract`            | Adapters satisfy ports; no write operations          | no          |
 | `tests/integration`         | Real broker, plus end-to-end stdio server            | **yes**     |
+| `tests/security`            | SASL/SCRAM and TLS against a secured broker, plus stdio over SASL_SSL | **yes** (secured) |
 
 Async tests use the anyio pytest plugin (`@pytest.mark.anyio`), which comes
 with the MCP SDK's own dependency on anyio.
@@ -48,6 +49,37 @@ uv run pytest -m integration
 
 The fixtures wait up to 90 s for the broker and the sample topics. Set
 `STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS` to point the tests at a different broker.
+
+## Security tests (SASL/SCRAM + TLS)
+
+```bash
+docker/kafka-secure/setup.sh       # or: make kafka-secure-up
+uv run pytest -m security          # or: make test-security
+```
+
+`setup.sh` starts a second, dev-only broker (compose profile `security`):
+
+| Port             | Protocol         | Authentication                        |
+| ---------------- | ---------------- | ------------------------------------- |
+| `localhost:9094` | `SASL_PLAINTEXT` | SCRAM-SHA-512                         |
+| `localhost:9095` | `SASL_SSL`       | SCRAM-SHA-512 over TLS (test-only CA) |
+
+On the first run, it generates everything into `docker/kafka-secure/.generated/`
+(gitignored): a random SCRAM password for the user `streamsage`, a throwaway
+CA (`ca.pem`), and the broker keystore. The certificates are created with the
+`keytool` inside the Kafka image, so the host only needs Docker and
+`openssl`. CI regenerates all of it on every run. To start from scratch,
+delete the folder and run `docker compose --profile security down -v`.
+
+The suite checks that:
+
+- valid credentials work on both listeners, with TLS verified against the
+  configured CA;
+- a wrong password is reported as an authentication failure, and an
+  untrusted certificate as a TLS failure, instead of a generic connection
+  error;
+- no password appears in errors or logs, including librdkafka's own logs;
+- the real `streamsage` process works end to end over stdio with `SASL_SSL`.
 
 ## Local Kafka
 
