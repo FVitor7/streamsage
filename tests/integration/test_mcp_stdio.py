@@ -106,3 +106,22 @@ async def test_stdio_server_detects_partitions_not_advancing() -> None:
     assert data is not None
     assert data["partition_counts"]["not_advancing"] == 3
     assert data["status"] == "warning"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("payloads", [False, True])
+async def test_stdio_server_inspects_messages_safely(
+    payloads: bool, customer_secrets: set[str]
+) -> None:
+    params = _server(STREAMSAGE_MESSAGE_PAYLOADS_ENABLED=str(payloads).lower())
+    async with Client(params) as client:
+        result = await client.call_tool(
+            "inspect_messages", {"topic_name": "customers.updated"}
+        )
+    assert result.is_error is False
+    data = result.structured_content
+    assert data is not None
+    assert data["payloads_included"] is payloads
+    assert data["message_count"] == 3
+    for secret in customer_secrets:
+        assert secret not in str(data)

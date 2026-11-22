@@ -7,9 +7,9 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M3 — Diagnostics Engine**: evidence-based findings with
-> hypotheses and recommendations, configurable severity, and stalled-partition
-> detection. See the [roadmap](#roadmap).
+> Status: **M4 — Message Intelligence** in progress: bounded, sanitized
+> message inspection is available; key search and DLQ support are next. See
+> the [roadmap](#roadmap).
 
 ## Why
 
@@ -34,6 +34,7 @@ will also return deterministic, evidence-based diagnostics.
 | Tool     | `get_consumer_lag`          | Per-partition lag, largest first, with total/max lag; `max_partitions` |
 | Tool     | `analyze_consumer_health`   | healthy / warning / critical / unknown, with evidence-backed findings and limitations |
 | Tool     | `detect_stalled_partitions` | Samples offsets twice (`interval_seconds`, 1–60) and reports partitions that did not advance |
+| Tool     | `inspect_messages`          | Newest (or from an offset) messages: key, headers, timestamp, offset, size; payload only if enabled, sanitized |
 | Resource | `kafka://cluster/info`      | Cluster info as JSON                                            |
 | Resource | `kafka://topics`            | Topic list as JSON                                              |
 | Prompt   | `investigate_kafka_cluster` | Guided, evidence-based investigation (optional `focus_topic`)   |
@@ -134,6 +135,11 @@ StreamSage reads its configuration from environment variables prefixed with
 | `STREAMSAGE_LAG_WARNING_THRESHOLD`    | `1000`           | Per-partition lag (messages) for a `warning` finding |
 | `STREAMSAGE_LAG_CRITICAL_THRESHOLD`   | `10000`          | Per-partition lag for `critical`; must be ≥ warning  |
 | `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` | `{}`           | JSON map of finding code → `info`/`warning`/`critical` |
+| `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` | `false`          | Return sanitized payload previews (otherwise size only) |
+| `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` | `1024`          | Payload preview limit (1–65536)                      |
+| `STREAMSAGE_MESSAGE_DEFAULT_LIMIT`    | `20`             | Messages per `inspect_messages` call by default      |
+| `STREAMSAGE_MESSAGE_MAX_LIMIT`        | `100`            | Maximum messages per call (≤ 1000)                   |
+| `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` | –                | Extra field/header names to redact, comma-separated  |
 
 The server checks for inconsistent settings at startup, for example a SASL
 protocol without credentials, or credentials without a SASL protocol. If it
@@ -182,7 +188,13 @@ Then ask things like *"What topics are available in this cluster?"*,
 
 - **Read-only.** No code path produces messages, creates or deletes topics,
   changes offsets or alters configuration. Also enforce this with Kafka ACLs:
-  give StreamSage a credential that only has `Describe` permissions.
+  give StreamSage `Describe` permissions, plus `Read` on topics only if you
+  want `inspect_messages`.
+- **Message privacy.** Payloads are omitted unless
+  `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED=true`. Even then, JSON fields and
+  headers with sensitive names are redacted and previews are truncated.
+  Message contents are never logged. Message inspection never joins a
+  consumer group or commits offsets.
 - **Credentials come from the operator**, through the environment. MCP clients
   cannot supply them per call.
 - **No secret leakage.** Passwords are `SecretStr`. Logs, tool errors and
@@ -214,7 +226,8 @@ excluded by default. See [docs/development.md](docs/development.md).
 - **M3 — Diagnostics Engine** ✅ structured findings with evidence,
   hypotheses and recommendations; configurable severity; stalled-partition
   detection by comparing offsets over time
-- **M4 — Message Intelligence**: bounded, sanitized message inspection
+- **M4 — Message Intelligence**: bounded, sanitized message inspection ✅;
+  key search and configurable DLQ topics next
 - **M5 — Production Readiness**: Streamable HTTP with auth, metrics, v1.0
 
 ## Contributing

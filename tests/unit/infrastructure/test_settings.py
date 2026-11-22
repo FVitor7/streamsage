@@ -189,3 +189,31 @@ def test_invalid_finding_severity_overrides(
     monkeypatch.setenv("STREAMSAGE_FINDING_SEVERITY_OVERRIDES", raw)
     with pytest.raises(error):
         Settings()
+
+
+def test_message_inspection_defaults() -> None:
+    settings = Settings()
+    assert settings.message_payloads_enabled is False
+    assert settings.message_max_payload_bytes == 1024
+    assert (settings.message_default_limit, settings.message_max_limit) == (20, 100)
+    assert settings.extra_sensitive_fields == frozenset()
+
+
+def test_extra_sensitive_fields_are_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STREAMSAGE_MESSAGE_SENSITIVE_FIELDS", " birth_date, ,rg ")
+    assert Settings().extra_sensitive_fields == frozenset({"birth_date", "rg"})
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"message_default_limit": 101},
+        {"message_max_limit": 0},
+        {"message_max_limit": 1001},
+        {"message_max_payload_bytes": 0},
+        {"message_max_payload_bytes": 65_537},
+    ],
+)
+def test_invalid_message_limits(overrides: dict[str, int]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(**overrides)  # type: ignore[arg-type]

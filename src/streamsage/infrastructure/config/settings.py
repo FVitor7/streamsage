@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     # Severity per finding code, as JSON, e.g. '{"NO_ACTIVE_MEMBERS": "info"}'.
     finding_severity_overrides: dict[str, Severity] = Field(default_factory=dict)
 
+    # Message inspection (M4). Payloads are omitted unless explicitly enabled.
+    message_payloads_enabled: bool = False
+    message_max_payload_bytes: int = Field(default=1024, ge=1, le=65_536)
+    message_default_limit: int = Field(default=20, ge=1)
+    message_max_limit: int = Field(default=100, ge=1, le=1_000)
+    # Extra field/header names to redact, comma-separated (added to defaults).
+    message_sensitive_fields: str = ""
+
     @field_validator(
         "kafka_sasl_mechanism",
         "kafka_sasl_username",
@@ -130,6 +138,11 @@ class Settings(BaseSettings):
             and not Path(self.kafka_ssl_ca_location).is_file()
         ):
             raise ValueError("STREAMSAGE_KAFKA_SSL_CA_LOCATION is not a readable file")
+        if self.message_default_limit > self.message_max_limit:
+            raise ValueError(
+                "STREAMSAGE_MESSAGE_DEFAULT_LIMIT must not exceed "
+                "STREAMSAGE_MESSAGE_MAX_LIMIT"
+            )
         if self.lag_critical_threshold < self.lag_warning_threshold:
             raise ValueError(
                 "STREAMSAGE_LAG_CRITICAL_THRESHOLD must be greater than or equal "
@@ -147,3 +160,11 @@ class Settings(BaseSettings):
             for server in self.kafka_bootstrap_servers.split(",")
         }
         return not hosts <= _LOOPBACK_HOSTS
+
+    @property
+    def extra_sensitive_fields(self) -> frozenset[str]:
+        return frozenset(
+            name.strip()
+            for name in self.message_sensitive_fields.split(",")
+            if name.strip()
+        )

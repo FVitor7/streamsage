@@ -169,6 +169,25 @@ would add state and lifecycle questions. Background sampling is out of
 scope for the MVP. Both remain possible later without changing the domain
 function, which only compares two samples.
 
+**Message inspection.** `inspect_messages` follows the same layering as the
+rest of the server:
+
+- `MessageReader` port: `partition_offsets()` (the topic is checked with
+  DescribeTopics first, so a missing topic is never auto-created) and
+  `read_range()`.
+- Pure domain planning (`domain/messages/planning.py`) decides which
+  offsets to read: the newest N per partition, or N from an offset.
+  Retention gaps and empty partitions become explicit notes.
+- Pure domain sanitization (`domain/messages/sanitizer.py`) turns raw
+  messages into `InspectedMessage`s before they leave the application layer.
+- `KafkaMessageAdapter` creates a short-lived consumer per call, assigns the
+  planned ranges, reads up to their end (or the partition end, or the
+  timeout), and closes the consumer. A timeout yields a partial result
+  marked `complete: false`.
+
+See [security.md](security.md#data-protection) for the privacy rules and
+their limits.
+
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The
 field is documented as such in the tool's output schema.

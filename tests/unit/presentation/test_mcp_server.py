@@ -22,6 +22,7 @@ from streamsage.application.use_cases.detect_stalled_partitions import (
 )
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
+from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
@@ -32,11 +33,13 @@ from streamsage.domain.exceptions import (
     KafkaConnectionError,
     KafkaOperationTimeoutError,
 )
+from streamsage.domain.messages.sanitizer import SanitizationPolicy
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
 from tests.fakes import (
     FakeClusterReader,
     FakeConsumerGroupReader,
+    FakeMessageReader,
     FakeTopicReader,
     make_topic,
     random_credential,
@@ -56,6 +59,8 @@ def build(
     group_reader: FakeConsumerGroupReader | None = None,
     thresholds: LagThresholds | None = None,
     policy: SeverityPolicy | None = None,
+    message_reader: FakeMessageReader | None = None,
+    payloads_enabled: bool = False,
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
     group_reader = group_reader or FakeConsumerGroupReader()
@@ -76,6 +81,14 @@ def build(
         detect_stalled_partitions_use_case=DetectStalledPartitionsUseCase(
             group_reader, policy, sleep=lambda _seconds: None
         ),
+        inspect_messages_use_case=InspectMessagesUseCase(
+            message_reader or FakeMessageReader(),
+            SanitizationPolicy(payloads_enabled=payloads_enabled),
+            max_messages=50,
+        ),
+        message_default_limit=5,
+        message_max_limit=50,
+        message_payloads_enabled=payloads_enabled,
         include_internal_topics=include_internal_topics,
     )
 
@@ -104,6 +117,7 @@ async def test_registers_exactly_the_expected_tools_as_read_only(
         "get_consumer_lag",
         "analyze_consumer_health",
         "detect_stalled_partitions",
+        "inspect_messages",
     }
     for tool in tools.values():
         assert tool.description

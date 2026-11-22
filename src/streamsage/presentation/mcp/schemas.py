@@ -4,6 +4,8 @@ These are boundary models (Pydantic) mapped from pure domain entities, so the
 wire format can evolve independently of the domain.
 """
 
+from datetime import UTC, datetime
+
 from pydantic import BaseModel, Field
 
 from streamsage.domain.diagnostics.consumer_health import ConsumerHealthReport
@@ -21,7 +23,14 @@ from streamsage.domain.entities.consumer_group import (
     ConsumerGroupSummary,
     GroupMember,
 )
+from streamsage.domain.entities.message import TimestampType
 from streamsage.domain.entities.topic import Partition, Topic
+from streamsage.domain.messages.sanitizer import (
+    ContentEncoding,
+    InspectedHeader,
+    InspectedMessage,
+    PayloadTreatment,
+)
 from streamsage.domain.value_objects.lag import ConsumerGroupLag, PartitionLag
 
 
@@ -411,3 +420,88 @@ class ConsumerProgressResponse(BaseModel):
             findings=[FindingResponse.from_domain(f) for f in report.findings],
             limitations=list(report.limitations),
         )
+
+
+class MessageHeaderResponse(BaseModel):
+    key: str
+    value: str | None = Field(
+        description="Decoded UTF-8 value (truncated), '[REDACTED]', or null."
+    )
+    value_size: int | None
+    encoding: ContentEncoding
+    redacted: bool
+    truncated: bool
+
+    @classmethod
+    def from_domain(cls, header: InspectedHeader) -> "MessageHeaderResponse":
+        return cls(
+            key=header.key,
+            value=header.value,
+            value_size=header.value_size,
+            encoding=header.encoding,
+            redacted=header.redacted,
+            truncated=header.truncated,
+        )
+
+
+class MessageResponse(BaseModel):
+    partition: int
+    offset: int
+    timestamp: str | None = Field(description="ISO 8601 UTC, or null if unavailable.")
+    timestamp_type: TimestampType
+    key: str | None = Field(description="Decoded UTF-8 key (truncated), or null.")
+    key_size: int | None
+    key_encoding: ContentEncoding
+    key_truncated: bool
+    headers: list[MessageHeaderResponse]
+    payload_size: int | None = Field(description="Payload size in bytes; null if none.")
+    payload_treatment: PayloadTreatment = Field(
+        description=(
+            "omitted (payloads disabled), null (no payload), json_redacted "
+            "(sensitive fields redacted, then truncated), text_truncated (not "
+            "JSON: truncated only), binary (not decoded)."
+        )
+    )
+    payload_preview: str | None
+    payload_truncated: bool
+    redacted_fields: list[str] = Field(
+        description="JSON paths whose values were replaced with '[REDACTED]'."
+    )
+
+    @classmethod
+    def from_domain(cls, message: InspectedMessage) -> "MessageResponse":
+        timestamp = (
+            None
+            if message.timestamp_ms is None
+            else datetime.fromtimestamp(message.timestamp_ms / 1000, tz=UTC).isoformat()
+        )
+        return cls(
+            partition=message.partition,
+            offset=message.offset,
+            timestamp=timestamp,
+            timestamp_type=message.timestamp_type,
+            key=message.key,
+            key_size=message.key_size,
+            key_encoding=message.key_encoding,
+            key_truncated=message.key_truncated,
+            headers=[MessageHeaderResponse.from_domain(h) for h in message.headers],
+            payload_size=message.payload_size,
+            payload_treatment=message.payload_treatment,
+            payload_preview=message.payload_preview,
+            payload_truncated=message.payload_truncated,
+            redacted_fields=list(message.redacted_fields),
+        )
+
+
+class MessageInspectionResponse(BaseModel):
+    topic: str
+    payloads_included: bool = Field(
+        description=(
+            "False unless the operator enabled payloads; sizes are always shown."
+        )
+    )
+    max_payload_bytes: int
+    message_count: int
+    complete: bool = Field(description="False if the read stopped early (timeout).")
+    notes: list[str]
+    messages: list[MessageResponse]

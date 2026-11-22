@@ -6,6 +6,8 @@
 #   orders.created      3 partitions, 300 keyed messages
 #   payments.processed  2 partitions, 50 keyed messages
 #   inventory.updated   1 partition,  20 messages
+#   customers.updated   1 partition,  3 JSON messages with fake personal data
+#                       and an Authorization header (exercises sanitization)
 #
 # Consumer groups (committed offsets set explicitly, so lag is deterministic):
 #   orders-service    orders.created, committed offset 40 on every partition
@@ -43,6 +45,13 @@ set_committed_offsets() {
     --group "$group" --topic "$topic" --reset-offsets "$@" --execute > /dev/null
 }
 
+topic_is_empty() {
+  local end
+  end="$("$BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP_SERVER" \
+    --topic "$1" | awk -F: '{sum += $3} END {print sum + 0}')"
+  [[ "$end" == "0" ]]
+}
+
 group_exists() {
   "$BIN/kafka-consumer-groups.sh" --bootstrap-server "$BOOTSTRAP_SERVER" --list |
     grep -qx "$1"
@@ -51,6 +60,7 @@ group_exists() {
 create_topic orders.created 3
 create_topic payments.processed 2
 create_topic inventory.updated 1
+create_topic customers.updated 1
 
 if group_exists orders-service; then
   echo "Sample data already seeded; skipping."
@@ -61,6 +71,23 @@ else
   set_committed_offsets orders-service orders.created --to-offset 40
   set_committed_offsets payments-service payments.processed --to-latest
   echo "Seeded sample messages and consumer groups."
+fi
+
+# Fake data only. Credential-like values are random per seeding, so no
+# secret-looking literal lives in the repository. Headers are "key:value"
+# pairs separated by commas; '|' separates headers, key and value.
+if topic_is_empty customers.updated; then
+  fake() { echo "fake-$1-$RANDOM$RANDOM"; }
+  printf '%s\n' \
+    "Authorization:Bearer $(fake auth),trace-id:abc-001|cust-1|{\"id\":1,\"name\":\"Ana\",\"email\":\"ana@example.com\",\"password\":\"$(fake pw)\",\"address\":{\"city\":\"Recife\",\"phone\":\"+55 81 0000-0000\"}}" \
+    "trace-id:abc-002|cust-2|{\"id\":2,\"name\":\"Bruno\",\"api_token\":\"$(fake tok)\",\"orders\":[{\"sku\":\"A1\",\"card_number\":\"0000 0000 0000 0000\"}]}" \
+    "trace-id:abc-003|cust-3|plain text payload, not JSON" |
+    "$BIN/kafka-console-producer.sh" --bootstrap-server "$BOOTSTRAP_SERVER" \
+      --topic customers.updated \
+      --property parse.headers=true --property headers.delimiter='|' \
+      --property headers.separator=, --property headers.key.separator=: \
+      --property parse.key=true --property key.separator='|' > /dev/null
+  echo "Seeded customers.updated."
 fi
 
 echo "Topics:"

@@ -6,13 +6,20 @@ import pytest
 
 from streamsage.application.ports.cluster_reader import ClusterReader
 from streamsage.application.ports.consumer_group_reader import ConsumerGroupReader
+from streamsage.application.ports.message_reader import MessageReader
 from streamsage.application.ports.topic_reader import TopicReader
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_consumer_group_adapter import (
     KafkaConsumerGroupAdapter,
 )
+from streamsage.infrastructure.kafka.kafka_message_adapter import KafkaMessageAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
-from tests.fakes import FakeClusterReader, FakeConsumerGroupReader, FakeTopicReader
+from tests.fakes import (
+    FakeClusterReader,
+    FakeConsumerGroupReader,
+    FakeMessageReader,
+    FakeTopicReader,
+)
 
 PAIRS = [
     (ClusterReader, KafkaClusterAdapter, ["get_cluster_info"]),
@@ -22,6 +29,7 @@ PAIRS = [
         KafkaConsumerGroupAdapter,
         ["list_consumer_groups", "describe_consumer_group", "get_consumer_lag"],
     ),
+    (MessageReader, KafkaMessageAdapter, ["partition_offsets", "read_range"]),
 ]
 
 
@@ -45,10 +53,19 @@ def test_adapters_and_fakes_satisfy_ports_structurally() -> None:
     groups = KafkaConsumerGroupAdapter(gateway=None)  # type: ignore[arg-type]
     assert isinstance(groups, ConsumerGroupReader)
     assert isinstance(FakeConsumerGroupReader(), ConsumerGroupReader)
+    messages = KafkaMessageAdapter(None, None, 1)  # type: ignore[arg-type]
+    assert isinstance(messages, MessageReader)
+    assert isinstance(FakeMessageReader(), MessageReader)
 
 
 @pytest.mark.parametrize(
-    "adapter", [KafkaClusterAdapter, KafkaTopicAdapter, KafkaConsumerGroupAdapter]
+    "adapter",
+    [
+        KafkaClusterAdapter,
+        KafkaTopicAdapter,
+        KafkaConsumerGroupAdapter,
+        KafkaMessageAdapter,
+    ],
 )
 def test_adapters_expose_no_write_operations(adapter: type) -> None:
     forbidden = ("create", "delete", "alter", "produce", "commit", "reset", "update")

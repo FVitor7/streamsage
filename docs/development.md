@@ -102,6 +102,7 @@ data volume:
 | `orders.created`     | 3          | 300      |
 | `payments.processed` | 2          | 50       |
 | `inventory.updated`  | 1          | 20       |
+| `customers.updated`  | 1          | 3 (fake personal data + `Authorization` header, for sanitization tests) |
 
 | Consumer group      | State         | Lag                                                   |
 | ------------------- | ------------- | ----------------------------------------------------- |
