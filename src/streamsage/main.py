@@ -6,12 +6,14 @@ import logging
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import NoReturn
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 from pydantic_settings import SettingsError
 
+from streamsage import __version__
 from streamsage.application.use_cases.analyze_consumer_health import (
     AnalyzeConsumerHealthUseCase,
 )
@@ -57,21 +59,30 @@ from streamsage.presentation.http.bearer_auth import generate_token, hash_token
 from streamsage.presentation.mcp.authorization import ALL_SCOPES
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
+from streamsage.shared.metrics import ServerMetrics
 
 logger = logging.getLogger("streamsage")
 
 EXIT_CONFIG_ERROR = 2
 
 
+@dataclass(frozen=True, slots=True)
+class Application:
+    server: MCPServer
+    metrics: ServerMetrics
+
+
 @contextmanager
-def build_application(settings: Settings) -> Iterator[MCPServer]:
-    """Yield a fully wired server; the Kafka client is closed on exit."""
+def build_application(settings: Settings) -> Iterator[Application]:
+    """Yield a fully wired application; the Kafka client is closed on exit."""
+    metrics = ServerMetrics(version=__version__)
     error_events = KafkaErrorEvents()
     with KafkaAdminClientFactory(settings).create(error_events) as admin_client:
         gateway = KafkaAdminGateway(
             admin_client,
             timeout_seconds=settings.kafka_request_timeout,
             error_events=error_events,
+            metrics=metrics,
         )
         topic_reader = KafkaTopicAdapter(gateway)
         cluster_reader = KafkaClusterAdapter(gateway)
@@ -81,13 +92,14 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
             gateway,
             KafkaConsumerFactory(settings),
             timeout_seconds=settings.kafka_request_timeout,
+            metrics=metrics,
         )
         sanitization = SanitizationPolicy(
             payloads_enabled=settings.message_payloads_enabled,
             max_payload_bytes=settings.message_max_payload_bytes,
             sensitive_terms=DEFAULT_SENSITIVE_TERMS | settings.extra_sensitive_fields,
         )
-        yield create_server(
+        server = create_server(
             get_cluster_info_use_case=GetClusterInfoUseCase(cluster_reader),
             list_topics_use_case=ListTopicsUseCase(topic_reader),
             describe_topic_use_case=DescribeTopicUseCase(topic_reader),
@@ -126,7 +138,9 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
             message_max_limit=settings.message_max_limit,
             message_payloads_enabled=settings.message_payloads_enabled,
             include_internal_topics=settings.include_internal_topics,
+            metrics=metrics,
         )
+        yield Application(server=server, metrics=metrics)
 
 
 def load_settings() -> Settings:
@@ -183,17 +197,17 @@ def serve() -> None:
         },
     )
     try:
-        with build_application(settings) as server:
+        with build_application(settings) as app:
             if settings.transport == "http":
-                _run_http(server, settings)
+                _run_http(app, settings)
             else:
-                server.run("stdio")
+                app.server.run("stdio")
     except ConfigurationError as exc:
         _exit_with_config_error(str(exc))
     logger.info("streamsage stopped")
 
 
-def _run_http(server: MCPServer, settings: Settings) -> None:
+def _run_http(app: Application, settings: Settings) -> None:
     import uvicorn
 
     from streamsage.presentation.http.app import MCP_PATH, build_http_app
@@ -210,7 +224,7 @@ def _run_http(server: MCPServer, settings: Settings) -> None:
         },
     )
     config = uvicorn.Config(
-        build_http_app(server, settings),
+        build_http_app(app.server, settings, app.metrics),
         host=settings.http_host,
         port=settings.http_port,
         log_config=None,  # keep StreamSage's JSON logging on stderr

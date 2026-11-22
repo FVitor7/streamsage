@@ -68,6 +68,7 @@ def build(
     message_reader: FakeMessageReader | None = None,
     payloads_enabled: bool = False,
     dlq_patterns: tuple[str, ...] = (),
+    metrics: Any = None,
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
     group_reader = group_reader or FakeConsumerGroupReader()
@@ -107,6 +108,7 @@ def build(
         message_max_limit=50,
         message_payloads_enabled=payloads_enabled,
         include_internal_topics=include_internal_topics,
+        metrics=metrics,
     )
 
 

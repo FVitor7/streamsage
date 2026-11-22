@@ -134,3 +134,30 @@ async def test_serialized_tool_list_is_filtered_too() -> None:
 async def test_unexpected_list_result_shapes_pass_through() -> None:
     outcome, _ = await _run(_ctx("tools/list", None, METADATA_ONLY), {"other": 1})
     assert outcome == {"other": 1}
+
+
+@pytest.mark.anyio
+async def test_denials_are_counted_with_bounded_labels() -> None:
+    from streamsage.shared.metrics import ServerMetrics
+
+    metrics = ServerMetrics("1.0")
+    middleware = ScopeAuthorizationMiddleware(metrics)
+
+    async def call_next(_ctx: Any) -> Any:
+        return "handled"
+
+    for name in ("inspect_messages", "made-up-tool"):
+        await middleware(_ctx("tools/call", {"name": name}, METADATA_ONLY), call_next)
+    reg = metrics.registry
+    assert (
+        reg.get_sample_value(
+            "streamsage_authorization_denials_total", {"target": "inspect_messages"}
+        )
+        == 1
+    )
+    assert (
+        reg.get_sample_value(
+            "streamsage_authorization_denials_total", {"target": "unknown"}
+        )
+        == 1
+    )

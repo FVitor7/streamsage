@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     # JSON list of {"name", "sha256", "scopes"}; create with
     # `streamsage generate-token`. Only hashes are configured, never tokens.
     http_tokens: list[HttpTokenSetting] = Field(default_factory=list)
+    # /metrics requires a valid token unless this is true.
+    http_metrics_public: bool = False
     include_internal_topics: bool = False
 
     # Per-partition lag, in messages, used by analyze_consumer_health.

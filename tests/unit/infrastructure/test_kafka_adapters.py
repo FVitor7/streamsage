@@ -345,3 +345,35 @@ def test_events_from_before_a_success_do_not_leak_into_later_errors() -> None:
     admin.error = KafkaException(KafkaError(KafkaError._TRANSPORT))
     with pytest.raises(KafkaConnectionError, match="Could not connect"):
         KafkaClusterAdapter(source).get_cluster_info()
+
+
+def test_gateway_records_kafka_request_metrics() -> None:
+    from streamsage.shared.metrics import ServerMetrics
+
+    metrics = ServerMetrics("1.0")
+    admin = FakeAdminClient()
+    gateway = KafkaAdminGateway(
+        admin,  # type: ignore[arg-type]
+        timeout_seconds=4,
+        error_events=KafkaErrorEvents(),
+        metrics=metrics,
+    )
+    KafkaClusterAdapter(gateway).get_cluster_info()
+    with pytest.raises(KafkaResourceNotFoundError):
+        KafkaTopicAdapter(gateway).describe_topic("missing")
+    admin.error = KafkaException(KafkaError(KafkaError._TRANSPORT))
+    with pytest.raises(KafkaConnectionError):
+        KafkaClusterAdapter(gateway).get_cluster_info()
+
+    def count(operation: str, outcome: str) -> float:
+        return (
+            metrics.registry.get_sample_value(
+                "streamsage_kafka_requests_total",
+                {"operation": operation, "outcome": outcome},
+            )
+            or 0
+        )
+
+    assert count("cluster metadata request", "success") == 1
+    assert count("cluster metadata request", "failure") == 1
+    assert count("topic description", "not_found") == 1

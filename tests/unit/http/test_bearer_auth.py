@@ -124,3 +124,27 @@ async def test_other_protocols_are_refused() -> None:
     sent = await _call(BearerAuthMiddleware(app, AUTH), {"type": "websocket"})
     assert app.scopes == []
     assert sent[0]["status"] == 404
+
+
+@pytest.mark.anyio
+async def test_auth_failures_are_counted() -> None:
+    from streamsage.shared.metrics import ServerMetrics
+
+    metrics = ServerMetrics("1.0")
+    middleware = BearerAuthMiddleware(Recorder(), AUTH, metrics=metrics)
+    await _call(middleware, _http([]))
+    await _call(middleware, _http([(b"authorization", b"Bearer wrong")]))
+    await _call(middleware, _http([(b"authorization", f"Bearer {TOKEN}".encode())]))
+    reg = metrics.registry
+    assert (
+        reg.get_sample_value(
+            "streamsage_http_auth_failures_total", {"reason": "missing_token"}
+        )
+        == 1
+    )
+    assert (
+        reg.get_sample_value(
+            "streamsage_http_auth_failures_total", {"reason": "invalid_token"}
+        )
+        == 1
+    )

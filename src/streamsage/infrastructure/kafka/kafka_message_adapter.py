@@ -27,7 +27,11 @@ from streamsage.domain.entities.message import (
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.consumer import KafkaConsumerFactory
 from streamsage.infrastructure.kafka.errors import translate_kafka_exception
-from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
+from streamsage.infrastructure.kafka.gateway import (
+    KafkaAdminGateway,
+    KafkaMetrics,
+    NoKafkaMetrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +49,12 @@ class KafkaMessageAdapter:
         gateway: KafkaAdminGateway,
         consumer_factory: KafkaConsumerFactory,
         timeout_seconds: float,
+        metrics: KafkaMetrics | None = None,
     ) -> None:
         self._gateway = gateway
         self._consumer_factory = consumer_factory
         self._timeout_seconds = timeout_seconds
+        self._metrics: KafkaMetrics = metrics or NoKafkaMetrics()
 
     def partition_offsets(self, topic: str) -> list[PartitionOffsets]:
         # DescribeTopics never auto-creates the topic (see KafkaTopicAdapter).
@@ -60,6 +66,10 @@ class KafkaMessageAdapter:
             not_found_message=f"Topic '{topic}' does not exist.",
         )
         partitions = sorted(p.id for p in description.partitions)
+        with self._metrics.kafka_request("offset lookup"):
+            return self._watermarks(topic, partitions)
+
+    def _watermarks(self, topic: str, partitions: list[int]) -> list[PartitionOffsets]:
         events = KafkaErrorEvents()
         consumer = self._consumer_factory.create(events)
         try:
@@ -81,6 +91,12 @@ class KafkaMessageAdapter:
         wanted = {r.partition: r for r in ranges if r.size > 0}
         if not wanted:
             return MessageReadResult(messages=(), complete=True)
+        with self._metrics.kafka_request("message read"):
+            return self._read_ranges(topic, wanted)
+
+    def _read_ranges(
+        self, topic: str, wanted: dict[int, OffsetRange]
+    ) -> MessageReadResult:
         events = KafkaErrorEvents()
         consumer = self._consumer_factory.create(events)
         try:
@@ -114,7 +130,8 @@ class KafkaMessageAdapter:
         events = KafkaErrorEvents()
         consumer = self._consumer_factory.create(events)
         try:
-            complete = self._consume(consumer, topic, wanted, keep_matches)
+            with self._metrics.kafka_request("key search"):
+                complete = self._consume(consumer, topic, wanted, keep_matches)
         except KafkaException as exc:
             raise self._failure(exc, consumer, events, "key search") from exc
         finally:

@@ -227,6 +227,19 @@ Over stdio, `ctx.request` is `None` and nothing is restricted. With protocol
 filtering handles both shapes; an end-to-end test over real HTTP guards
 this.
 
+**Metrics.** `ServerMetrics` (`shared/metrics.py`) owns a dedicated
+Prometheus registry, created by the composition root rather than held as
+process-global state. Four places record into it:
+
+- an MCP middleware for tool calls; it is the outermost middleware, so calls
+  denied by authorization are counted too;
+- `KafkaAdminGateway` and `KafkaMessageAdapter` for Kafka requests;
+- the bearer middleware for authentication failures;
+- the authorization middleware for scope denials.
+
+Labels only take values defined in code. `/metrics` is served in HTTP mode
+only; over stdio there is no listener to scrape.
+
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The
 field is documented as such in the tool's output schema.

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from streamsage.presentation.mcp.authorization import PRINCIPAL_SCOPE_KEY, Principal
+from streamsage.shared.metrics import ServerMetrics
 
 logger = logging.getLogger("streamsage.auth")
 
@@ -68,10 +69,12 @@ class BearerAuthMiddleware:
         app: ASGIApp,
         authenticator: StaticTokenAuthenticator,
         public_paths: frozenset[str] = frozenset(),
+        metrics: ServerMetrics | None = None,
     ) -> None:
         self._app = app
         self._authenticator = authenticator
         self._public_paths = public_paths
+        self._metrics = metrics
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -87,6 +90,9 @@ class BearerAuthMiddleware:
         token = _bearer_token(scope)
         principal = self._authenticator.authenticate(token) if token else None
         if principal is None:
+            reason = "invalid_token" if token else "missing_token"
+            if self._metrics is not None:
+                self._metrics.http_auth_failures.labels(reason=reason).inc()
             client = scope.get("client") or ("?", 0)
             logger.warning(
                 "authentication failed",
