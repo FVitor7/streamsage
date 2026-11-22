@@ -2,7 +2,9 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from pydantic_settings import SettingsError
 
+from streamsage.domain.diagnostics.severity import Severity
 from streamsage.infrastructure.config.settings import Settings
 from tests.fakes import random_credential
 
@@ -158,3 +160,32 @@ def test_lag_threshold_defaults_and_environment(
 def test_inconsistent_lag_thresholds_are_rejected(warning: int, critical: int) -> None:
     with pytest.raises(ValidationError):
         Settings(lag_warning_threshold=warning, lag_critical_threshold=critical)
+
+
+def test_finding_severity_overrides_from_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "STREAMSAGE_FINDING_SEVERITY_OVERRIDES",
+        '{"NO_ACTIVE_MEMBERS": "info", "PARTITIONS_NOT_ADVANCING": "critical"}',
+    )
+    overrides = Settings().finding_severity_overrides
+    assert overrides == {
+        "NO_ACTIVE_MEMBERS": Severity.INFO,
+        "PARTITIONS_NOT_ADVANCING": Severity.CRITICAL,
+    }
+    assert Settings.model_fields["finding_severity_overrides"].default_factory
+
+
+@pytest.mark.parametrize(
+    ("raw", "error"),
+    [
+        ('{"NO_SUCH_CODE": "info"}', ValidationError),
+        ('{"NO_ACTIVE_MEMBERS": "urgent"}', ValidationError),
+        ("not json", SettingsError),
+    ],
+)
+def test_invalid_finding_severity_overrides(
+    monkeypatch: pytest.MonkeyPatch, raw: str, error: type[Exception]
+) -> None:
+    monkeypatch.setenv("STREAMSAGE_FINDING_SEVERITY_OVERRIDES", raw)
+    with pytest.raises(error):
+        Settings()

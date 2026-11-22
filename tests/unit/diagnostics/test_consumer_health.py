@@ -1,12 +1,12 @@
 import pytest
 
 from streamsage.domain.diagnostics.consumer_health import (
-    MAX_EVIDENCE_PARTITIONS,
     SNAPSHOT_LIMITATION,
     ConsumerHealthReport,
     LagThresholds,
     assess_consumer_health,
 )
+from streamsage.domain.diagnostics.evidence import MAX_EVIDENCE_PARTITIONS
 from streamsage.domain.diagnostics.finding import Evidence
 from streamsage.domain.diagnostics.severity import HealthStatus, Severity
 from streamsage.domain.entities.consumer_group import (
@@ -147,7 +147,9 @@ def test_unassigned_partitions_with_lag() -> None:
     assert report.status is HealthStatus.WARNING
     assert _codes(report) == ["UNASSIGNED_PARTITIONS_WITH_LAG"]
     finding = report.findings[0]
-    assert "unverified" in finding.summary  # a hypothesis, not a conclusion
+    # The explanation is a hypothesis, kept out of the observed summary.
+    assert "subscribe" not in finding.summary
+    assert finding.hypotheses == ("The group may no longer subscribe to these topics.",)
     assert finding.evidence == (Evidence("old-topic[0].lag", 40),)
 
 

@@ -17,6 +17,9 @@ from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
 from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
+from streamsage.application.use_cases.detect_stalled_partitions import (
+    DetectStalledPartitionsUseCase,
+)
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
@@ -24,6 +27,7 @@ from streamsage.application.use_cases.list_consumer_groups import (
 )
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.domain.diagnostics.consumer_health import LagThresholds
+from streamsage.domain.diagnostics.finding import SeverityPolicy
 from streamsage.domain.exceptions import (
     KafkaConnectionError,
     KafkaOperationTimeoutError,
@@ -51,6 +55,7 @@ def build(
     include_internal_topics: bool = False,
     group_reader: FakeConsumerGroupReader | None = None,
     thresholds: LagThresholds | None = None,
+    policy: SeverityPolicy | None = None,
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
     group_reader = group_reader or FakeConsumerGroupReader()
@@ -64,7 +69,12 @@ def build(
         describe_consumer_group_use_case=DescribeConsumerGroupUseCase(group_reader),
         get_consumer_lag_use_case=GetConsumerLagUseCase(group_reader),
         analyze_consumer_health_use_case=AnalyzeConsumerHealthUseCase(
-            group_reader, thresholds or LagThresholds(warning=50, critical=500)
+            group_reader,
+            thresholds or LagThresholds(warning=50, critical=500),
+            policy,
+        ),
+        detect_stalled_partitions_use_case=DetectStalledPartitionsUseCase(
+            group_reader, policy, sleep=lambda _seconds: None
         ),
         include_internal_topics=include_internal_topics,
     )
@@ -93,6 +103,7 @@ async def test_registers_exactly_the_expected_tools_as_read_only(
         "describe_consumer_group",
         "get_consumer_lag",
         "analyze_consumer_health",
+        "detect_stalled_partitions",
     }
     for tool in tools.values():
         assert tool.description

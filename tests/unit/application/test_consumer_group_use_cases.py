@@ -6,6 +6,9 @@ from streamsage.application.use_cases.analyze_consumer_health import (
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
+from streamsage.application.use_cases.detect_stalled_partitions import (
+    DetectStalledPartitionsUseCase,
+)
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
@@ -18,6 +21,7 @@ from streamsage.domain.exceptions import (
     KafkaConnectionError,
     KafkaResourceNotFoundError,
 )
+from streamsage.domain.value_objects.lag import PartitionLag
 from tests.fakes import SAMPLE_GROUP, FakeConsumerGroupReader
 
 
@@ -97,3 +101,33 @@ def test_analyze_consumer_health_validates_and_propagates_errors() -> None:
     assert reader.requested == []
     with pytest.raises(KafkaResourceNotFoundError):
         AnalyzeConsumerHealthUseCase(reader, thresholds).execute("missing")
+
+
+def test_detect_stalled_partitions_samples_twice_around_the_interval() -> None:
+    events: list[str] = []
+
+    class RecordingReader(FakeConsumerGroupReader):
+        def get_consumer_lag(self, group_id: str) -> list[PartitionLag]:
+            events.append("sample")
+            return super().get_consumer_lag(group_id)
+
+    def sleep(seconds: float) -> None:
+        events.append(f"sleep {seconds:g}")
+
+    report = DetectStalledPartitionsUseCase(RecordingReader(), sleep=sleep).execute(
+        "billing", 7
+    )
+    assert events == ["sample", "sleep 7", "sample"]
+    assert report.interval_seconds == 7
+    assert report.group == SAMPLE_GROUP
+
+
+@pytest.mark.parametrize(("group_id", "interval"), [("", 10), ("billing", 0)])
+def test_detect_stalled_partitions_validates_before_sampling(
+    group_id: str, interval: float
+) -> None:
+    reader = FakeConsumerGroupReader()
+    use_case = DetectStalledPartitionsUseCase(reader, sleep=lambda _s: None)
+    with pytest.raises(InvalidInputError):
+        use_case.execute(group_id, interval)
+    assert reader.requested == []
