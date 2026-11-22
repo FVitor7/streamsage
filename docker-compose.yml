@@ -111,5 +111,18 @@ services:
       retries: 24
       start_period: 10s
 
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: streamsage-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      DYNAMIC_CONFIG_ENABLED: "true"
+      KAFKA_CLUSTERS_0_NAME: streamsage-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
 volumes:
   kafka-data:
