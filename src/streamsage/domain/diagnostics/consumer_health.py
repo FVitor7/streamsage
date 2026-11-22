@@ -2,22 +2,49 @@
 
 The assessment is deterministic and uses a single snapshot of the group and
 its lag. It never claims a consumer is stuck: proving that requires offsets
-observed at more than one point in time.
+observed at more than one point in time (see ``consumer_progress``).
 """
 
 from dataclasses import dataclass
 
-from streamsage.domain.diagnostics.finding import Evidence, Finding
+from streamsage.domain.diagnostics.evidence import partition_evidence
+from streamsage.domain.diagnostics.finding import (
+    Evidence,
+    Finding,
+    SeverityPolicy,
+    worst_status,
+)
 from streamsage.domain.diagnostics.severity import HealthStatus, Severity
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,
     ConsumerGroupState,
 )
 from streamsage.domain.exceptions import InvalidInputError
-from streamsage.domain.value_objects.lag import ConsumerGroupLag, PartitionLag
+from streamsage.domain.value_objects.lag import ConsumerGroupLag
 
-# Findings list at most this many partitions as evidence.
-MAX_EVIDENCE_PARTITIONS = 5
+LAG_ABOVE_CRITICAL = "LAG_ABOVE_CRITICAL"
+LAG_ABOVE_WARNING = "LAG_ABOVE_WARNING"
+NO_ACTIVE_MEMBERS = "NO_ACTIVE_MEMBERS"
+INACTIVE_CAUGHT_UP = "INACTIVE_CAUGHT_UP"
+REBALANCING = "REBALANCING"
+UNASSIGNED_PARTITIONS_WITH_LAG = "UNASSIGNED_PARTITIONS_WITH_LAG"
+NO_PARTITIONS = "NO_PARTITIONS"
+LAG_UNKNOWN = "LAG_UNKNOWN"
+STATE_UNKNOWN = "STATE_UNKNOWN"
+
+HEALTH_FINDING_CODES = frozenset(
+    {
+        LAG_ABOVE_CRITICAL,
+        LAG_ABOVE_WARNING,
+        NO_ACTIVE_MEMBERS,
+        INACTIVE_CAUGHT_UP,
+        REBALANCING,
+        UNASSIGNED_PARTITIONS_WITH_LAG,
+        NO_PARTITIONS,
+        LAG_UNKNOWN,
+        STATE_UNKNOWN,
+    }
+)
 
 _REBALANCING = frozenset(
     {ConsumerGroupState.PREPARING_REBALANCE, ConsumerGroupState.COMPLETING_REBALANCE}
@@ -26,7 +53,12 @@ _REBALANCING = frozenset(
 SNAPSHOT_LIMITATION = (
     "Based on a single snapshot: it shows how far behind the group is, not "
     "whether its offsets are advancing. A large lag can belong to a healthy "
-    "consumer catching up."
+    "consumer catching up. Use detect_stalled_partitions to compare offsets "
+    "over time."
+)
+
+_CHECK_PROGRESS = (
+    "Run detect_stalled_partitions to check whether committed offsets are advancing."
 )
 
 
@@ -58,21 +90,26 @@ class ConsumerHealthReport:
 
 
 def assess_consumer_health(
-    group: ConsumerGroup, lag: ConsumerGroupLag, thresholds: LagThresholds
+    group: ConsumerGroup,
+    lag: ConsumerGroupLag,
+    thresholds: LagThresholds,
+    policy: SeverityPolicy | None = None,
 ) -> ConsumerHealthReport:
-    findings = [
-        *_lag_threshold_findings(lag, thresholds),
-        *_membership_findings(group, lag),
-        *_rebalance_findings(group),
-        *_unassigned_findings(group, lag),
-        *_data_gap_findings(group, lag),
-    ]
+    findings = (policy or SeverityPolicy()).apply(
+        [
+            *_lag_threshold_findings(lag, thresholds),
+            *_membership_findings(group, lag),
+            *_rebalance_findings(group),
+            *_unassigned_findings(group, lag),
+            *_data_gap_findings(group, lag),
+        ]
+    )
     return ConsumerHealthReport(
         group=group,
         lag=lag,
         thresholds=thresholds,
-        status=_overall_status(findings, lag),
-        findings=tuple(findings),
+        status=worst_status(findings, has_data=lag.total_lag is not None),
+        findings=findings,
         limitations=(
             SNAPSHOT_LIMITATION,
             f"Lag thresholds are configured values (warning >= "
@@ -86,38 +123,44 @@ def _lag_threshold_findings(
     lag: ConsumerGroupLag, thresholds: LagThresholds
 ) -> list[Finding]:
     critical = [p for p in lag.partitions if (p.lag or 0) >= thresholds.critical]
-    if critical:
-        return [
-            Finding(
-                code="LAG_ABOVE_CRITICAL",
-                severity=Severity.CRITICAL,
-                summary=(
-                    f"{len(critical)} partition(s) have lag at or above the "
-                    f"critical threshold of {thresholds.critical} messages."
-                ),
-                evidence=(
-                    Evidence("max_lag", lag.max_lag),
-                    *_partition_evidence(critical),
-                ),
-            )
-        ]
     warning = [p for p in lag.partitions if (p.lag or 0) >= thresholds.warning]
-    if warning:
-        return [
-            Finding(
-                code="LAG_ABOVE_WARNING",
-                severity=Severity.WARNING,
-                summary=(
-                    f"{len(warning)} partition(s) have lag at or above the "
-                    f"warning threshold of {thresholds.warning} messages."
-                ),
-                evidence=(
-                    Evidence("max_lag", lag.max_lag),
-                    *_partition_evidence(warning),
-                ),
-            )
-        ]
-    return []
+    if critical:
+        code, severity, offending, limit = (
+            LAG_ABOVE_CRITICAL,
+            Severity.CRITICAL,
+            critical,
+            thresholds.critical,
+        )
+        level = "critical"
+    elif warning:
+        code, severity, offending, limit = (
+            LAG_ABOVE_WARNING,
+            Severity.WARNING,
+            warning,
+            thresholds.warning,
+        )
+        level = "warning"
+    else:
+        return []
+    return [
+        Finding(
+            code=code,
+            severity=severity,
+            summary=(
+                f"{len(offending)} partition(s) have lag at or above the {level} "
+                f"threshold of {limit} messages."
+            ),
+            evidence=(Evidence("max_lag", lag.max_lag), *partition_evidence(offending)),
+            hypotheses=(
+                "Consumers may be slower than producers.",
+                "Consumers may have restarted recently and be catching up.",
+            ),
+            recommendations=(
+                _CHECK_PROGRESS,
+                "Compare the consumers' processing rate with the producers' rate.",
+            ),
+        )
+    ]
 
 
 def _membership_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Finding]:
@@ -127,7 +170,7 @@ def _membership_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Fi
     if total is not None and total > 0:
         return [
             Finding(
-                code="NO_ACTIVE_MEMBERS",
+                code=NO_ACTIVE_MEMBERS,
                 severity=Severity.WARNING,
                 summary=(
                     f"The group has no active members while {total} message(s) "
@@ -138,12 +181,21 @@ def _membership_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Fi
                     Evidence("member_count", 0),
                     Evidence("total_lag", total),
                 ),
+                hypotheses=(
+                    "The consuming application may be stopped or unable to join "
+                    "the group.",
+                    "The group may be obsolete and no longer used.",
+                ),
+                recommendations=(
+                    "Check whether the consuming application is running and can "
+                    "reach the cluster.",
+                ),
             )
         ]
     if total == 0:
         return [
             Finding(
-                code="INACTIVE_CAUGHT_UP",
+                code=INACTIVE_CAUGHT_UP,
                 severity=Severity.INFO,
                 summary="The group has no active members and no pending messages.",
                 evidence=(
@@ -160,7 +212,7 @@ def _rebalance_findings(group: ConsumerGroup) -> list[Finding]:
         return []
     return [
         Finding(
-            code="REBALANCING",
+            code=REBALANCING,
             severity=Severity.WARNING,
             summary=(
                 "The group is rebalancing; members pause consumption during a "
@@ -169,6 +221,14 @@ def _rebalance_findings(group: ConsumerGroup) -> list[Finding]:
             evidence=(
                 Evidence("state", group.state.value),
                 Evidence("member_count", group.member_count),
+            ),
+            hypotheses=(
+                "Members may be joining or leaving, for example during a deploy.",
+                "Members exceeding max.poll.interval.ms can cause repeated rebalances.",
+            ),
+            recommendations=(
+                "Analyze the group again shortly; a rebalance that persists over "
+                "several observations deserves investigation.",
             ),
         )
     ]
@@ -187,14 +247,18 @@ def _unassigned_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Fi
         return []
     return [
         Finding(
-            code="UNASSIGNED_PARTITIONS_WITH_LAG",
+            code=UNASSIGNED_PARTITIONS_WITH_LAG,
             severity=Severity.WARNING,
             summary=(
                 f"{len(unassigned)} partition(s) with pending messages are not "
-                "assigned to any member. Possible explanation (unverified): the "
-                "group no longer subscribes to their topic."
+                "assigned to any member."
             ),
-            evidence=tuple(_partition_evidence(unassigned)),
+            evidence=partition_evidence(unassigned),
+            hypotheses=("The group may no longer subscribe to these topics.",),
+            recommendations=(
+                "Confirm the group's topic subscription; if these topics are no "
+                "longer consumed, their committed offsets are stale.",
+            ),
         )
     ]
 
@@ -204,11 +268,11 @@ def _data_gap_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Find
     if not lag.partitions:
         findings.append(
             Finding(
-                code="NO_PARTITIONS",
+                code=NO_PARTITIONS,
                 severity=Severity.INFO,
                 summary=(
-                    "The group has no committed offsets and no assigned "
-                    "partitions, so its lag cannot be assessed."
+                    "Insufficient data: the group has no committed offsets and no "
+                    "assigned partitions, so its lag cannot be assessed."
                 ),
                 evidence=(Evidence("state", group.state.value),),
             )
@@ -217,44 +281,29 @@ def _data_gap_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Find
     if unknown:
         findings.append(
             Finding(
-                code="LAG_UNKNOWN",
+                code=LAG_UNKNOWN,
                 severity=Severity.INFO,
                 summary=(
-                    f"Lag is unknown for {len(unknown)} partition(s): no committed "
-                    "offset, or the end offset could not be read."
+                    f"Insufficient data: lag is unknown for {len(unknown)} "
+                    "partition(s) (no committed offset, or the end offset could "
+                    "not be read)."
                 ),
-                evidence=tuple(_partition_evidence(unknown)),
+                evidence=partition_evidence(unknown),
+                hypotheses=(
+                    "A newly assigned partition has no committed offset until the "
+                    "consumer commits for the first time.",
+                ),
             )
         )
     if group.state is ConsumerGroupState.UNKNOWN:
         findings.append(
             Finding(
-                code="STATE_UNKNOWN",
+                code=STATE_UNKNOWN,
                 severity=Severity.INFO,
-                summary="The group coordinator did not report a known group state.",
+                summary=(
+                    "Insufficient data: the group coordinator did not report a "
+                    "known group state."
+                ),
             )
         )
     return findings
-
-
-def _overall_status(findings: list[Finding], lag: ConsumerGroupLag) -> HealthStatus:
-    severities = {finding.severity for finding in findings}
-    if Severity.CRITICAL in severities:
-        return HealthStatus.CRITICAL
-    if Severity.WARNING in severities:
-        return HealthStatus.WARNING
-    if lag.total_lag is None:
-        return HealthStatus.UNKNOWN
-    return HealthStatus.HEALTHY
-
-
-def _partition_evidence(partitions: list[PartitionLag]) -> list[Evidence]:
-    evidence = [
-        Evidence(f"{p.topic}[{p.partition}].lag", p.lag)
-        for p in partitions[:MAX_EVIDENCE_PARTITIONS]
-    ]
-    if len(partitions) > MAX_EVIDENCE_PARTITIONS:
-        evidence.append(
-            Evidence("more_partitions", len(partitions) - MAX_EVIDENCE_PARTITIONS)
-        )
-    return evidence

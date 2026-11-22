@@ -22,11 +22,14 @@ Follow these steps:
    `describe_consumer_group` to see members and assignments. Quote each
    finding's evidence and repeat its limitations.
    A lag of null means the offset is unknown, not zero. Lag is a single
-   snapshot: high lag alone does not prove a consumer is stuck, since that
-   requires seeing offsets fail to advance over time.
+   snapshot: high lag alone does not prove a consumer is stuck. When lag is
+   high, call `detect_stalled_partitions`, which compares committed offsets
+   over a sampling interval.
 5. Report your findings in two clearly separated sections:
    - **Observed**: facts returned by the tools, quoting the relevant values.
-   - **Hypotheses**: possible explanations, each marked as unverified.
+   - **Hypotheses**: possible explanations, each marked as unverified. Use
+     the findings' `hypotheses` and `recommendations`; never present a
+     hypothesis as the root cause.
 6. Do not claim the cluster is fully healthy based on this data. It does
    not show throughput, disk usage, broker resource pressure or client
    errors. State which data you did not have.

@@ -65,3 +65,16 @@ def test_main_exits_cleanly_when_kafka_rejects_configuration(
     assert captured.out == ""
     assert "rejected the configuration" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_unparseable_environment_value_exits_without_leaking_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    value = "not-json-" + "x" * 8
+    monkeypatch.setenv("STREAMSAGE_FINDING_SEVERITY_OVERRIDES", value)
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.load_settings()
+    assert exit_info.value.code == main_module.EXIT_CONFIG_ERROR
+    err = capsys.readouterr().err
+    assert "finding_severity_overrides" in err
+    assert value not in err

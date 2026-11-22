@@ -10,9 +10,16 @@ from streamsage.application.use_cases.analyze_consumer_health import (
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
+from streamsage.application.use_cases.detect_stalled_partitions import (
+    DetectStalledPartitionsUseCase,
+)
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
+)
+from streamsage.domain.diagnostics.consumer_progress import (
+    MAX_SAMPLE_INTERVAL_SECONDS,
+    MIN_SAMPLE_INTERVAL_SECONDS,
 )
 from streamsage.domain.entities.consumer_group import ConsumerGroupState
 from streamsage.domain.value_objects.group_id import MAX_GROUP_ID_LENGTH
@@ -22,10 +29,12 @@ from streamsage.presentation.mcp.schemas import (
     ConsumerGroupListResponse,
     ConsumerHealthResponse,
     ConsumerLagResponse,
+    ConsumerProgressResponse,
 )
 from streamsage.presentation.mcp.tools.annotations import READ_ONLY
 
 DEFAULT_MAX_PARTITIONS = 100
+DEFAULT_SAMPLE_INTERVAL_SECONDS = 10
 MAX_PARTITIONS_LIMIT = 1000
 
 GroupId = Annotated[
@@ -44,6 +53,7 @@ def register_consumer_tools(
     describe_group_use_case: DescribeConsumerGroupUseCase,
     get_lag_use_case: GetConsumerLagUseCase,
     analyze_health_use_case: AnalyzeConsumerHealthUseCase,
+    detect_stalled_use_case: DetectStalledPartitionsUseCase,
 ) -> None:
     @server.tool(
         name="list_consumer_groups",
@@ -128,3 +138,43 @@ def register_consumer_tools(
         with operation_boundary("analyze_consumer_health", ToolError, ctx.request_id):
             report = analyze_health_use_case.execute(group_id)
         return ConsumerHealthResponse.from_domain(report)
+
+    @server.tool(
+        name="detect_stalled_partitions",
+        title="Detect stalled partitions",
+        description=(
+            "Detect partitions whose committed offsets are not advancing. Samples "
+            "the group's offsets twice, interval_seconds apart, within this call, "
+            "and classifies each partition as advancing, caught_up, not_advancing "
+            "(pending messages but no commits), moved_backward or unknown. The "
+            "call takes at least interval_seconds. A consumer that commits less "
+            "often than the interval can look stalled."
+        ),
+        annotations=READ_ONLY,
+    )
+    def detect_stalled_partitions(
+        group_id: GroupId,
+        interval_seconds: Annotated[
+            int,
+            Field(
+                description="Seconds between the two samples.",
+                ge=MIN_SAMPLE_INTERVAL_SECONDS,
+                le=MAX_SAMPLE_INTERVAL_SECONDS,
+            ),
+        ] = DEFAULT_SAMPLE_INTERVAL_SECONDS,
+        max_partitions: Annotated[
+            int,
+            Field(
+                description="Maximum number of partitions to list.",
+                ge=1,
+                le=MAX_PARTITIONS_LIMIT,
+            ),
+        ] = DEFAULT_MAX_PARTITIONS,
+        *,
+        ctx: Context,
+    ) -> ConsumerProgressResponse:
+        with operation_boundary("detect_stalled_partitions", ToolError, ctx.request_id):
+            report = detect_stalled_use_case.execute(group_id, interval_seconds)
+        return ConsumerProgressResponse.from_domain(
+            report, max_partitions=max_partitions
+        )

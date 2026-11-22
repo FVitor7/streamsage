@@ -7,6 +7,11 @@ wire format can evolve independently of the domain.
 from pydantic import BaseModel, Field
 
 from streamsage.domain.diagnostics.consumer_health import ConsumerHealthReport
+from streamsage.domain.diagnostics.consumer_progress import (
+    ConsumerProgressReport,
+    PartitionProgress,
+    ProgressStatus,
+)
 from streamsage.domain.diagnostics.finding import EvidenceValue, Finding
 from streamsage.domain.diagnostics.severity import HealthStatus, Severity
 from streamsage.domain.entities.cluster import Broker, Cluster
@@ -281,8 +286,12 @@ class EvidenceResponse(BaseModel):
 class FindingResponse(BaseModel):
     code: str = Field(description="Stable identifier of the finding type.")
     severity: Severity
-    summary: str
+    summary: str = Field(description="What was observed.")
     evidence: list[EvidenceResponse]
+    hypotheses: list[str] = Field(
+        description="Possible explanations. Unverified; none is a root cause."
+    )
+    recommendations: list[str] = Field(description="Suggested read-only next steps.")
 
     @classmethod
     def from_domain(cls, finding: Finding) -> "FindingResponse":
@@ -293,6 +302,8 @@ class FindingResponse(BaseModel):
             evidence=[
                 EvidenceResponse(label=e.label, value=e.value) for e in finding.evidence
             ],
+            hypotheses=list(finding.hypotheses),
+            recommendations=list(finding.recommendations),
         )
 
 
@@ -332,6 +343,71 @@ class ConsumerHealthResponse(BaseModel):
                 warning=report.thresholds.warning,
                 critical=report.thresholds.critical,
             ),
+            findings=[FindingResponse.from_domain(f) for f in report.findings],
+            limitations=list(report.limitations),
+        )
+
+
+class PartitionProgressResponse(BaseModel):
+    topic: str
+    partition: int
+    status: ProgressStatus
+    committed_before: int | None
+    committed_after: int | None
+    committed_delta: int | None = Field(
+        description="Messages committed during the window; null if unknown."
+    )
+    new_messages: int | None = Field(
+        description="Log end offset growth during the window; null if unknown."
+    )
+    lag_after: int | None
+
+    @classmethod
+    def from_domain(cls, p: PartitionProgress) -> "PartitionProgressResponse":
+        return cls(
+            topic=p.topic,
+            partition=p.partition,
+            status=p.status,
+            committed_before=p.committed_before,
+            committed_after=p.committed_after,
+            committed_delta=p.committed_delta,
+            new_messages=p.end_delta,
+            lag_after=p.lag_after,
+        )
+
+
+class ConsumerProgressResponse(BaseModel):
+    group_id: str
+    status: HealthStatus = Field(
+        description="Worst finding severity; 'unknown' without usable samples."
+    )
+    state: ConsumerGroupState
+    member_count: int
+    interval_seconds: float
+    partition_counts: dict[ProgressStatus, int]
+    truncated: bool = Field(
+        description="True when only the first max_partitions partitions are listed."
+    )
+    partitions: list[PartitionProgressResponse] = Field(
+        description="Not-advancing partitions first, then by lag."
+    )
+    findings: list[FindingResponse]
+    limitations: list[str]
+
+    @classmethod
+    def from_domain(
+        cls, report: ConsumerProgressReport, *, max_partitions: int
+    ) -> "ConsumerProgressResponse":
+        listed = report.partitions[:max_partitions]
+        return cls(
+            group_id=report.group.group_id,
+            status=report.status,
+            state=report.group.state,
+            member_count=report.group.member_count,
+            interval_seconds=report.interval_seconds,
+            partition_counts={s: report.count(s) for s in ProgressStatus},
+            truncated=len(listed) < len(report.partitions),
+            partitions=[PartitionProgressResponse.from_domain(p) for p in listed],
             findings=[FindingResponse.from_domain(f) for f in report.findings],
             limitations=list(report.limitations),
         )

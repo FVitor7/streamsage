@@ -8,6 +8,7 @@ from typing import NoReturn
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
+from pydantic_settings import SettingsError
 
 from streamsage.application.use_cases.analyze_consumer_health import (
     AnalyzeConsumerHealthUseCase,
@@ -16,12 +17,16 @@ from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
 from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
+from streamsage.application.use_cases.detect_stalled_partitions import (
+    DetectStalledPartitionsUseCase,
+)
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
+from streamsage.domain.diagnostics.catalog import severity_policy
 from streamsage.domain.diagnostics.consumer_health import LagThresholds
 from streamsage.domain.exceptions import ConfigurationError
 from streamsage.infrastructure.config.settings import Settings
@@ -54,6 +59,7 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
         topic_reader = KafkaTopicAdapter(gateway)
         cluster_reader = KafkaClusterAdapter(gateway)
         group_reader = KafkaConsumerGroupAdapter(gateway)
+        policy = severity_policy(settings.finding_severity_overrides)
         yield create_server(
             get_cluster_info_use_case=GetClusterInfoUseCase(cluster_reader),
             list_topics_use_case=ListTopicsUseCase(topic_reader),
@@ -67,6 +73,10 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
                     warning=settings.lag_warning_threshold,
                     critical=settings.lag_critical_threshold,
                 ),
+                policy,
+            ),
+            detect_stalled_partitions_use_case=DetectStalledPartitionsUseCase(
+                group_reader, policy
             ),
             include_internal_topics=settings.include_internal_topics,
         )
@@ -84,6 +94,10 @@ def load_settings() -> Settings:
             for err in exc.errors(include_input=False, include_url=False)
         )
         _exit_with_config_error(details)
+    except SettingsError as exc:
+        # Raised when an environment value cannot be parsed (for example
+        # invalid JSON). The message names the field, never its value.
+        _exit_with_config_error(str(exc))
 
 
 def _exit_with_config_error(details: str) -> NoReturn:

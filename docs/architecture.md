@@ -121,12 +121,53 @@ snapshot, and the thresholds (`STREAMSAGE_LAG_*_THRESHOLD`, per partition, in
 messages) are configured values, not derived from the consumer's throughput.
 The analysis never states that a consumer is stuck or names a root cause.
 
-**Stalled partitions are an M3 feature.** The spec's M2 tool table lists
-`detect_stalled_partitions`, but proving that a consumer is not progressing
-requires comparing offsets at more than one point in time (spec, M3), and M2
-has no persistence or background sampling. Lag is a single snapshot, and high
-lag alone does not prove a stall. The tool is therefore deferred to M3, where
-offset snapshots are introduced.
+**Findings.** Every diagnostic produces `Finding`s
+(`domain/diagnostics/finding.py`) with:
+
+- `code`: stable identifier (the full list is in `diagnostics/catalog.py`);
+- `severity`: `info`, `warning` or `critical`;
+- `summary`: only what was observed;
+- `evidence`: the observed values behind the summary (capped per finding);
+- `hypotheses`: possible explanations, unverified by definition;
+- `recommendations`: read-only next steps.
+
+Summaries never contain hypotheses, and no finding asserts a root cause.
+Insufficient data is reported explicitly, through findings whose summary
+starts with "Insufficient data" and a `unknown` status, never as `healthy`.
+
+**Configurable severity.** `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` (JSON)
+maps finding codes to severities, for example to treat inactive groups as
+`info` or not-advancing partitions as `critical`. The overall status is
+computed after overrides. Unknown codes and invalid values are rejected at
+startup, so a typo cannot silently disable an override.
+
+**Stalled partitions (`detect_stalled_partitions`).** The spec's rule is that
+absence of progress can only be detected by comparing offsets at more than
+one point in time. The MVP has no persistence and no background monitoring,
+so the tool takes both samples **within a single call**: it reads the
+group's committed and end offsets, waits `interval_seconds` (1–60, default
+10), reads them again, and compares partition by partition:
+
+| Status | Rule |
+| --- | --- |
+| `advancing` | committed offset increased |
+| `caught_up` | committed offset unchanged, nothing pending |
+| `not_advancing` | committed offset unchanged, messages pending |
+| `moved_backward` | committed offset decreased (reset or reprocessing) |
+| `unknown` | an offset is missing from either sample |
+
+`not_advancing` partitions produce a `PARTITIONS_NOT_ADVANCING` warning. Its
+evidence includes how many of them received new messages during the window.
+Committed offsets are not the consumer's in-memory position: a consumer that
+commits less often than the interval can look stalled. The finding says so,
+and recommends sampling again with a longer interval. The call blocks for at
+least `interval_seconds`, which must stay below the MCP client's request
+timeout.
+
+Alternatives considered: an in-memory snapshot store, compared across calls,
+would add state and lifecycle questions. Background sampling is out of
+scope for the MVP. Both remain possible later without changing the domain
+function, which only compares two samples.
 
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The

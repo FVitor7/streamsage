@@ -10,6 +10,7 @@ docker/kafka/init-topics.sh seeds deterministic data:
 import time
 
 import pytest
+from confluent_kafka import Producer
 
 from streamsage.application.use_cases.analyze_consumer_health import (
     AnalyzeConsumerHealthUseCase,
@@ -17,14 +18,19 @@ from streamsage.application.use_cases.analyze_consumer_health import (
 from streamsage.application.use_cases.describe_consumer_group import (
     DescribeConsumerGroupUseCase,
 )
+from streamsage.application.use_cases.detect_stalled_partitions import (
+    DetectStalledPartitionsUseCase,
+)
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
 from streamsage.domain.diagnostics.consumer_health import LagThresholds
+from streamsage.domain.diagnostics.consumer_progress import ProgressStatus
 from streamsage.domain.diagnostics.severity import HealthStatus
 from streamsage.domain.entities.consumer_group import ConsumerGroup, ConsumerGroupState
 from streamsage.domain.exceptions import KafkaResourceNotFoundError
+from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 from streamsage.infrastructure.kafka.kafka_consumer_group_adapter import (
     KafkaConsumerGroupAdapter,
@@ -133,3 +139,37 @@ def test_health_of_caught_up_groups(
     report = AnalyzeConsumerHealthUseCase(adapter, DEFAULT_THRESHOLDS).execute(group_id)
     assert report.status is HealthStatus.HEALTHY
     assert report.lag.total_lag == 0
+
+
+def test_inactive_group_partitions_are_not_advancing(
+    adapter: KafkaConsumerGroupAdapter,
+) -> None:
+    report = DetectStalledPartitionsUseCase(adapter).execute("orders-service", 2)
+    assert {p.status for p in report.partitions} == {ProgressStatus.NOT_ADVANCING}
+    assert report.count(ProgressStatus.NOT_ADVANCING) == ORDERS_PARTITIONS
+    assert report.status is HealthStatus.WARNING
+    assert [f.code for f in report.findings] == ["PARTITIONS_NOT_ADVANCING"]
+
+
+def test_active_consumer_is_advancing(
+    adapter: KafkaConsumerGroupAdapter, kafka_settings: Settings
+) -> None:
+    # Test-only writes: produce while sampling so the active sample consumer
+    # (auto-commit every 5s) has something to consume and commit.
+    _wait_for_stable_group(adapter, "inventory-service")
+    use_case = DetectStalledPartitionsUseCase(
+        adapter, sleep=lambda seconds: _produce_then_wait(kafka_settings, seconds)
+    )
+    report = use_case.execute("inventory-service", 8)
+    (partition,) = report.partitions
+    assert partition.status is ProgressStatus.ADVANCING
+    assert (partition.committed_delta or 0) > 0
+    assert report.status is HealthStatus.HEALTHY
+
+
+def _produce_then_wait(settings: Settings, seconds: float) -> None:
+    producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    for i in range(10):
+        producer.produce("inventory.updated", key=f"it-{i}", value=b"{}")
+    producer.flush(5)
+    time.sleep(seconds)

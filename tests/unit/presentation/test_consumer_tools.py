@@ -190,17 +190,26 @@ async def test_analyze_consumer_health(client: Client) -> None:
         "UNASSIGNED_PARTITIONS_WITH_LAG",
         "LAG_UNKNOWN",
     ]
-    assert data["findings"][0] == {
-        "code": "LAG_ABOVE_WARNING",
-        "severity": "warning",
-        "summary": (
-            "1 partition(s) have lag at or above the warning threshold of 50 messages."
-        ),
-        "evidence": [
-            {"label": "max_lag", "value": 60},
-            {"label": "payments[0].lag", "value": 60},
-        ],
+    finding = data["findings"][0]
+    assert set(finding) == {
+        "code",
+        "severity",
+        "summary",
+        "evidence",
+        "hypotheses",
+        "recommendations",
     }
+    assert finding["code"] == "LAG_ABOVE_WARNING"
+    assert finding["severity"] == "warning"
+    assert finding["summary"] == (
+        "1 partition(s) have lag at or above the warning threshold of 50 messages."
+    )
+    assert finding["evidence"] == [
+        {"label": "max_lag", "value": 60},
+        {"label": "payments[0].lag", "value": 60},
+    ]
+    assert finding["hypotheses"]
+    assert any("detect_stalled_partitions" in r for r in finding["recommendations"])
     assert any("single snapshot" in text for text in data["limitations"])
 
 
@@ -220,3 +229,91 @@ async def test_analyze_missing_group_is_controlled_error(client: Client) -> None
     result = await client.call_tool("analyze_consumer_health", {"group_id": "ghost"})
     assert result.is_error is True
     assert "Consumer group 'ghost' does not exist." in _text(result)
+
+
+@pytest.mark.anyio
+async def test_detect_stalled_partitions() -> None:
+    first = [
+        PartitionLag("payments", 0, 40, 100),
+        PartitionLag("payments", 1, 10, 10),
+    ]
+    second = [
+        PartitionLag("payments", 0, 40, 130),  # pending, no commits
+        PartitionLag("payments", 1, 10, 10),  # caught up
+    ]
+    reader = SequencedLagReader([first, second])
+    async with Client(build(group_reader=reader)) as c:
+        result = await c.call_tool(
+            "detect_stalled_partitions", {"group_id": "billing", "interval_seconds": 5}
+        )
+    assert result.is_error is False
+    data = result.structured_content
+    assert data is not None
+    assert data["status"] == "warning"
+    assert data["interval_seconds"] == 5
+    assert data["partition_counts"] == {
+        "advancing": 0,
+        "caught_up": 1,
+        "not_advancing": 1,
+        "moved_backward": 0,
+        "unknown": 0,
+    }
+    assert data["partitions"][0] == {
+        "topic": "payments",
+        "partition": 0,
+        "status": "not_advancing",
+        "committed_before": 40,
+        "committed_after": 40,
+        "committed_delta": 0,
+        "new_messages": 30,
+        "lag_after": 90,
+    }
+    assert [f["code"] for f in data["findings"]] == ["PARTITIONS_NOT_ADVANCING"]
+    assert data["truncated"] is False
+    assert any("commits less often" in text for text in data["limitations"])
+
+
+@pytest.mark.anyio
+async def test_detect_stalled_partitions_honors_severity_overrides() -> None:
+    from streamsage.domain.diagnostics.catalog import severity_policy
+    from streamsage.domain.diagnostics.severity import Severity
+
+    lag = [PartitionLag("payments", 0, 40, 100)]
+    reader = SequencedLagReader([lag, lag])
+    policy = severity_policy({"PARTITIONS_NOT_ADVANCING": Severity.CRITICAL})
+    async with Client(build(group_reader=reader, policy=policy)) as c:
+        result = await c.call_tool("detect_stalled_partitions", {"group_id": "billing"})
+    assert result.structured_content is not None
+    assert result.structured_content["status"] == "critical"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"group_id": "billing", "interval_seconds": 0},
+        {"group_id": "billing", "interval_seconds": 61},
+        {"group_id": "billing", "max_partitions": 0},
+        {"group_id": ""},
+    ],
+)
+async def test_detect_stalled_partitions_rejects_invalid_arguments(
+    arguments: dict[str, Any],
+) -> None:
+    reader = FakeConsumerGroupReader()
+    async with Client(build(group_reader=reader)) as c:
+        result = await c.call_tool("detect_stalled_partitions", arguments)
+    assert result.is_error is True
+    assert reader.requested == []
+
+
+class SequencedLagReader(FakeConsumerGroupReader):
+    """Returns a different lag sample on each get_consumer_lag call."""
+
+    def __init__(self, samples: list[list[PartitionLag]]) -> None:
+        super().__init__()
+        self._samples = list(samples)
+
+    def get_consumer_lag(self, group_id: str) -> list[PartitionLag]:
+        self.describe_consumer_group(group_id)
+        return self._samples.pop(0)

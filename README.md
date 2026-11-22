@@ -7,8 +7,9 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M2 — Consumer Intelligence** complete: consumer groups, lag and
-> health analysis. The diagnostics engine (M3) is on the [roadmap](#roadmap).
+> Status: **M3 — Diagnostics Engine**: evidence-based findings with
+> hypotheses and recommendations, configurable severity, and stalled-partition
+> detection. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -32,6 +33,7 @@ will also return deterministic, evidence-based diagnostics.
 | Tool     | `describe_consumer_group`   | State, assignor, coordinator, members and their partitions      |
 | Tool     | `get_consumer_lag`          | Per-partition lag, largest first, with total/max lag; `max_partitions` |
 | Tool     | `analyze_consumer_health`   | healthy / warning / critical / unknown, with evidence-backed findings and limitations |
+| Tool     | `detect_stalled_partitions` | Samples offsets twice (`interval_seconds`, 1–60) and reports partitions that did not advance |
 | Resource | `kafka://cluster/info`      | Cluster info as JSON                                            |
 | Resource | `kafka://topics`            | Topic list as JSON                                              |
 | Prompt   | `investigate_kafka_cluster` | Guided, evidence-based investigation (optional `focus_topic`)   |
@@ -44,7 +46,12 @@ auto-creation enabled; the integration tests verify this.
 Lag is reported per partition as `log_end_offset - committed_offset`. A
 partition the group has never committed has `lag: null`. StreamSage never
 reports unknown lag as 0. Lag is a single snapshot: high lag alone does not
-prove a consumer is stuck.
+prove a consumer is stuck. `detect_stalled_partitions` checks progress by
+sampling committed offsets twice within one call.
+
+Every diagnostic finding states what was observed and the evidence behind
+it. Possible explanations go in a separate `hypotheses` list, and next steps
+in `recommendations`. No finding asserts a root cause.
 
 ## Architecture
 
@@ -126,6 +133,7 @@ StreamSage reads its configuration from environment variables prefixed with
 | `STREAMSAGE_INCLUDE_INTERNAL_TOPICS`  | `false`          | Default for `list_topics` and `kafka://topics`       |
 | `STREAMSAGE_LAG_WARNING_THRESHOLD`    | `1000`           | Per-partition lag (messages) for a `warning` finding |
 | `STREAMSAGE_LAG_CRITICAL_THRESHOLD`   | `10000`          | Per-partition lag for `critical`; must be ≥ warning  |
+| `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` | `{}`           | JSON map of finding code → `info`/`warning`/`critical` |
 
 The server checks for inconsistent settings at startup, for example a SASL
 protocol without credentials, or credentials without a SASL protocol. If it
@@ -203,9 +211,9 @@ excluded by default. See [docs/development.md](docs/development.md).
 - **M1 — Foundation & Cluster Explorer** ✅ cluster info, topics, partitions
 - **M2 — Consumer Intelligence** ✅ consumer groups, lag, health analysis
   with configurable thresholds
-- **M3 — Diagnostics Engine**: structured, evidence-based findings;
-  stalled-partition detection (`detect_stalled_partitions`) by comparing
-  offset snapshots over time
+- **M3 — Diagnostics Engine** ✅ structured findings with evidence,
+  hypotheses and recommendations; configurable severity; stalled-partition
+  detection by comparing offsets over time
 - **M4 — Message Intelligence**: bounded, sanitized message inspection
 - **M5 — Production Readiness**: Streamable HTTP with auth, metrics, v1.0
 

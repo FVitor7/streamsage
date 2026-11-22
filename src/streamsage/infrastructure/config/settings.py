@@ -10,6 +10,9 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from streamsage.domain.diagnostics.catalog import ALL_FINDING_CODES
+from streamsage.domain.diagnostics.severity import Severity
+
 SecurityProtocol = Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"]
 # Mechanisms that only need username/password. GSSAPI and OAUTHBEARER need
 # additional configuration and are not supported yet.
@@ -48,6 +51,9 @@ class Settings(BaseSettings):
     lag_warning_threshold: int = Field(default=1_000, ge=1)
     lag_critical_threshold: int = Field(default=10_000, ge=1)
 
+    # Severity per finding code, as JSON, e.g. '{"NO_ACTIVE_MEMBERS": "info"}'.
+    finding_severity_overrides: dict[str, Severity] = Field(default_factory=dict)
+
     @field_validator(
         "kafka_sasl_mechanism",
         "kafka_sasl_username",
@@ -60,6 +66,19 @@ class Settings(BaseSettings):
         # `.env.example` ships keys with empty values; treat them as unset.
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("finding_severity_overrides")
+    @classmethod
+    def _validate_finding_codes(cls, value: dict[str, Severity]) -> dict[str, Severity]:
+        unknown = sorted(set(value) - ALL_FINDING_CODES)
+        if unknown:
+            raise ValueError(
+                "unknown finding code(s): "
+                + ", ".join(unknown)
+                + "; valid codes: "
+                + ", ".join(sorted(ALL_FINDING_CODES))
+            )
         return value
 
     @field_validator("kafka_bootstrap_servers")

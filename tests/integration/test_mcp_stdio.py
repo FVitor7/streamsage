@@ -92,3 +92,17 @@ async def test_stdio_server_applies_configured_lag_thresholds() -> None:
         "LAG_ABOVE_CRITICAL",
         "NO_ACTIVE_MEMBERS",
     ]
+
+
+@pytest.mark.anyio
+async def test_stdio_server_detects_partitions_not_advancing() -> None:
+    async with Client(_server()) as client:
+        result = await client.call_tool(
+            "detect_stalled_partitions",
+            {"group_id": "orders-service", "interval_seconds": 1},
+        )
+    assert result.is_error is False
+    data = result.structured_content
+    assert data is not None
+    assert data["partition_counts"]["not_advancing"] == 3
+    assert data["status"] == "warning"
