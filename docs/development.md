@@ -7,10 +7,11 @@ uv sync                      # creates .venv with runtime + dev dependencies
 uv run pre-commit install    # optional: ruff + mypy on commit
 ```
 
-Development and CI use the latest stable Python, pinned in `.python-version`
-(currently 3.15). The package still declares `requires-python = ">=3.12"`;
-ruff (`target-version = "py312"`) and mypy (`python_version = "3.12"`) keep the
-code from using syntax or standard-library APIs newer than 3.12.
+The minimum supported version is Python 3.12 (`requires-python = ">=3.12"`).
+Development and CI run on that minimum, pinned in `.python-version`, so the
+supported floor is always the version under test. ruff
+(`target-version = "py312"`) and mypy (`python_version = "3.12"`) target the
+same version.
 
 ## Quality gate
 
