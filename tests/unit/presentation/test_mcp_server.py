@@ -17,7 +17,12 @@ from streamsage.domain.exceptions import (
     KafkaOperationTimeoutError,
 )
 from streamsage.presentation.mcp.server import create_server
-from tests.fakes import FakeClusterReader, FakeTopicReader, make_topic
+from tests.fakes import (
+    FakeClusterReader,
+    FakeTopicReader,
+    make_topic,
+    random_credential,
+)
 
 TOPICS = [
     make_topic("orders.created", 3, replicas=(1, 2), isr=(1,)),
@@ -180,12 +185,13 @@ async def test_known_errors_return_safe_message(error: Exception) -> None:
 
 @pytest.mark.anyio
 async def test_unexpected_errors_do_not_leak_details() -> None:
-    error = RuntimeError("password=hunter2 at /internal/path.py line 42")
+    sensitive = random_credential()
+    error = RuntimeError(f"internal detail {sensitive} at /internal/path.py line 42")
     async with Client(build(cluster_reader=FakeClusterReader(error=error))) as c:
         result = await c.call_tool("get_cluster_info", {})
     assert result.is_error is True
     text = _text(result)
-    assert "hunter2" not in text
+    assert sensitive not in text
     assert "/internal/path.py" not in text
     assert "Traceback" not in text
 

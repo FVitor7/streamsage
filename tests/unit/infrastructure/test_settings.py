@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from streamsage.infrastructure.config.settings import Settings
+from tests.fakes import random_credential
 
 
 @pytest.fixture(autouse=True)
@@ -44,17 +45,18 @@ def test_blank_optional_values_are_unset(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_sasl_settings_are_accepted_and_password_is_secret() -> None:
+    password = random_credential()
     settings = Settings(
         kafka_bootstrap_servers="kafka.example.com:9094",
         kafka_security_protocol="SASL_SSL",
         kafka_sasl_mechanism="SCRAM-SHA-512",
-        kafka_sasl_username="svc-streamsage",
-        kafka_sasl_password="hunter2",  # type: ignore[arg-type]
+        kafka_sasl_username="test-user",
+        kafka_sasl_password=password,  # type: ignore[arg-type]
     )
     assert settings.kafka_sasl_password is not None
-    assert settings.kafka_sasl_password.get_secret_value() == "hunter2"
-    assert "hunter2" not in repr(settings)
-    assert "hunter2" not in str(settings.model_dump())
+    assert settings.kafka_sasl_password.get_secret_value() == password
+    assert password not in repr(settings)
+    assert password not in str(settings.model_dump())
     assert settings.uses_unencrypted_remote_connection is False
 
 

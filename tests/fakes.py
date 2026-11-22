@@ -1,5 +1,7 @@
 """In-memory test doubles for the application ports."""
 
+import secrets
+
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.topic import Partition, Topic
 from streamsage.domain.exceptions import KafkaResourceNotFoundError
@@ -27,6 +29,15 @@ def make_topic(
         ),
         internal=name.startswith("__") if internal is None else internal,
     )
+
+
+def random_credential() -> str:
+    """Generate a throwaway credential per test run.
+
+    Tests never hardcode credential-looking literals, so secret scanners have
+    nothing to flag and leak assertions cannot pass by coincidence.
+    """
+    return secrets.token_urlsafe(24)
 
 
 SAMPLE_CLUSTER = Cluster(

@@ -5,13 +5,15 @@ import pytest
 
 from streamsage import main as main_module
 from streamsage.infrastructure.config.settings import Settings
+from tests.fakes import random_credential
 
 
 def test_invalid_configuration_exits_without_leaking_values(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("STREAMSAGE_KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
-    monkeypatch.setenv("STREAMSAGE_KAFKA_SASL_PASSWORD", "hunter2-secret")
+    password = random_credential()
+    monkeypatch.setenv("STREAMSAGE_KAFKA_SASL_PASSWORD", password)
     monkeypatch.setenv("STREAMSAGE_KAFKA_REQUEST_TIMEOUT", "-5")
 
     with pytest.raises(SystemExit) as exit_info:
@@ -22,7 +24,7 @@ def test_invalid_configuration_exits_without_leaking_values(
     assert captured.out == ""
     assert "invalid configuration" in captured.err
     assert "kafka_request_timeout" in captured.err
-    assert "hunter2-secret" not in captured.err
+    assert password not in captured.err
 
 
 class _FakeAdminClient(AbstractContextManager["_FakeAdminClient"]):

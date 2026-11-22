@@ -9,6 +9,7 @@ from streamsage.infrastructure.kafka.admin_client import (
     KafkaAdminClientFactory,
     build_admin_config,
 )
+from tests.fakes import random_credential
 
 
 def test_plaintext_config() -> None:
@@ -24,20 +25,21 @@ def test_plaintext_config() -> None:
 
 
 def test_sasl_ssl_config() -> None:
+    password = random_credential()
     config = build_admin_config(
         Settings(
             kafka_bootstrap_servers="kafka.example.com:9094",
             kafka_security_protocol="SASL_SSL",
             kafka_sasl_mechanism="SCRAM-SHA-256",
-            kafka_sasl_username="svc",
-            kafka_sasl_password="s3cret",  # type: ignore[arg-type]
+            kafka_sasl_username="test-user",
+            kafka_sasl_password=password,  # type: ignore[arg-type]
             kafka_ssl_ca_location="/etc/ssl/ca.pem",
         )
     )
     assert config["security.protocol"] == "SASL_SSL"
     assert config["sasl.mechanism"] == "SCRAM-SHA-256"
-    assert config["sasl.username"] == "svc"
-    assert config["sasl.password"] == "s3cret"
+    assert config["sasl.username"] == "test-user"
+    assert config["sasl.password"] == password
     assert config["ssl.ca.location"] == "/etc/ssl/ca.pem"
 
 
