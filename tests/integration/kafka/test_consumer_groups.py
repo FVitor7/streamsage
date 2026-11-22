@@ -105,14 +105,20 @@ def _wait_for_stable_group(
     while time.monotonic() < deadline:
         try:
             group = DescribeConsumerGroupUseCase(adapter).execute(group_id)
-            if group.state is ConsumerGroupState.STABLE and group.members:
+            # A freshly started consumer joins before its first commit; until
+            # then its lag is unknown. Wait for both.
+            committed = all(
+                p.committed_offset is not None
+                for p in adapter.get_consumer_lag(group_id)
+            )
+            if group.state is ConsumerGroupState.STABLE and group.members and committed:
                 return group
         except KafkaResourceNotFoundError:
             pass
         time.sleep(1)
     pytest.fail(
-        f"{group_id} not stable after {timeout}s (last: {group}). "
-        "Start it with `docker compose up -d kafka-consumer`."
+        f"{group_id} not stable with committed offsets after {timeout}s "
+        f"(last: {group}). Start it with `docker compose up -d kafka-consumer`."
     )
 
 

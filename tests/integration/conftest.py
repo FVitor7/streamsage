@@ -19,7 +19,12 @@ from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 
 BOOTSTRAP = os.environ.get("STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 READY_TIMEOUT_SECONDS = 90
-SAMPLE_TOPICS = {"orders.created": 3, "payments.processed": 2, "inventory.updated": 1}
+SAMPLE_TOPICS = {
+    "orders.created": 3,
+    "payments.processed": 2,
+    "inventory.updated": 1,
+    "customers.updated": 1,
+}
 
 
 @pytest.fixture(scope="session")
@@ -71,3 +76,39 @@ def _wait_until_ready(client: AdminClient) -> None:
         f"Kafka at {BOOTSTRAP} not ready after {READY_TIMEOUT_SECONDS}s "
         f"({last_error}). Start it with `docker compose up -d`."
     )
+
+
+@pytest.fixture
+def customer_secrets(gateway: KafkaAdminGateway, kafka_settings: Settings) -> set[str]:
+    """The sensitive values actually stored in customers.updated.
+
+    The seed script generates credential-like values at random, so tests
+    read the raw messages (test-only, bypassing sanitization) to learn them,
+    then assert they never appear in sanitized output.
+    """
+    import json
+
+    from streamsage.domain.entities.message import OffsetRange
+    from streamsage.infrastructure.kafka.consumer import KafkaConsumerFactory
+    from streamsage.infrastructure.kafka.kafka_message_adapter import (
+        KafkaMessageAdapter,
+    )
+
+    reader = KafkaMessageAdapter(
+        gateway, KafkaConsumerFactory(kafka_settings), timeout_seconds=10
+    )
+    raw = reader.read_range("customers.updated", [OffsetRange(0, 0, 3)]).messages
+    by_key = {m.key: m for m in raw}
+    first = json.loads(by_key[b"cust-1"].value or b"{}")
+    second = json.loads(by_key[b"cust-2"].value or b"{}")
+    authorization = next(
+        h.value for h in by_key[b"cust-1"].headers if h.key == "Authorization"
+    )
+    return {
+        first["email"],
+        first["password"],
+        first["address"]["phone"],
+        second["api_token"],
+        second["orders"][0]["card_number"],
+        (authorization or b"").decode(),
+    }

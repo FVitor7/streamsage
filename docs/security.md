@@ -15,9 +15,18 @@ least privilege that M1 needs:
 | Cluster  | `Describe` | Cluster and broker metadata; listing consumer groups   |
 | Topic(s) | `Describe` | Topic and partition metadata; log end offsets for lag  |
 | Group(s) | `Describe` | Describing groups and reading their committed offsets  |
+| Topic(s) | `Read`     | **Only** for `inspect_messages`; omit it to disable message reads |
 
-No `Read` permission is needed: StreamSage reads offsets, never messages.
-Topics and groups the principal cannot describe do not appear in results.
+Without `Read`, every tool except `inspect_messages` works. Topics and groups
+the principal cannot describe do not appear in results.
+
+Message inspection uses a consumer with a fixed `group.id`
+(`streamsage-inspector-readonly`), because librdkafka requires one. It only
+ever calls `assign()` with explicit offsets: it never subscribes, joins the
+group or commits offsets, and the group does not appear on the cluster
+(verified against Kafka 4.3). This was not tested against a broker that
+enforces ACLs. If yours requires `Read` on that group anyway, grant it, or
+please report it.
 
 ## Credentials
 
@@ -63,5 +72,32 @@ Topics and groups the principal cannot describe do not appear in results.
 
 ## Data protection
 
-M1 never reads message payloads. Message inspection (M4) will be opt-in,
-bounded in count and size, and sanitized.
+`inspect_messages` can return message data to the MCP client, and from there
+to an LLM. Defaults are conservative:
+
+- **Payloads are omitted** unless `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED=true`.
+  Keys, headers, timestamps, offsets and payload sizes are returned, since
+  the spec treats them as metadata.
+- **Redaction by name.** In JSON payloads, the value of any field whose
+  normalized name contains a sensitive term (`password`, `secret`, `token`,
+  `authorization`, `apikey`, `credential`, `cookie`, `email`, `phone`,
+  `cpf`, `cnpj`, `ssn`, `creditcard`, `cardnumber`, `cvv`, `iban`, …) is
+  replaced with `[REDACTED]`, recursively. Header values with such names are
+  withheld too. Add terms with `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS`.
+- **Limits.** At most `STREAMSAGE_MESSAGE_MAX_LIMIT` messages per call
+  (default 100, default request 20). Payload previews are capped at
+  `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` (default 1 KB), and keys and header
+  values at 256 bytes. Redaction happens before truncation, so a redacted
+  value never reappears.
+- **Binary content** (Avro, Protobuf, anything that is not UTF-8) is never
+  decoded; only its size is returned.
+- **No logging.** Message keys, headers and payloads are never logged, and
+  raw messages do not render their payload even in debug representations.
+
+Known limits, stated on every response through `payload_treatment`:
+
+- Redaction relies on **field names**. A sensitive value under an innocuous
+  name (for example `"note": "my password is …"`) is not detected.
+- Non-JSON text payloads (`text_truncated`) are only truncated, not redacted.
+- Keys are returned as metadata and are not redacted; avoid putting personal
+  data in keys, or leave `Read` permission off.

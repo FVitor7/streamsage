@@ -22,6 +22,7 @@ from streamsage.application.use_cases.detect_stalled_partitions import (
 )
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
+from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
@@ -29,14 +30,20 @@ from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.domain.diagnostics.catalog import severity_policy
 from streamsage.domain.diagnostics.consumer_health import LagThresholds
 from streamsage.domain.exceptions import ConfigurationError
+from streamsage.domain.messages.sanitizer import (
+    DEFAULT_SENSITIVE_TERMS,
+    SanitizationPolicy,
+)
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
+from streamsage.infrastructure.kafka.consumer import KafkaConsumerFactory
 from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_consumer_group_adapter import (
     KafkaConsumerGroupAdapter,
 )
+from streamsage.infrastructure.kafka.kafka_message_adapter import KafkaMessageAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
@@ -60,6 +67,16 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
         cluster_reader = KafkaClusterAdapter(gateway)
         group_reader = KafkaConsumerGroupAdapter(gateway)
         policy = severity_policy(settings.finding_severity_overrides)
+        message_reader = KafkaMessageAdapter(
+            gateway,
+            KafkaConsumerFactory(settings),
+            timeout_seconds=settings.kafka_request_timeout,
+        )
+        sanitization = SanitizationPolicy(
+            payloads_enabled=settings.message_payloads_enabled,
+            max_payload_bytes=settings.message_max_payload_bytes,
+            sensitive_terms=DEFAULT_SENSITIVE_TERMS | settings.extra_sensitive_fields,
+        )
         yield create_server(
             get_cluster_info_use_case=GetClusterInfoUseCase(cluster_reader),
             list_topics_use_case=ListTopicsUseCase(topic_reader),
@@ -78,6 +95,12 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
             detect_stalled_partitions_use_case=DetectStalledPartitionsUseCase(
                 group_reader, policy
             ),
+            inspect_messages_use_case=InspectMessagesUseCase(
+                message_reader, sanitization, settings.message_max_limit
+            ),
+            message_default_limit=settings.message_default_limit,
+            message_max_limit=settings.message_max_limit,
+            message_payloads_enabled=settings.message_payloads_enabled,
             include_internal_topics=settings.include_internal_topics,
         )
 

@@ -1,6 +1,7 @@
 """In-memory test doubles for the application ports."""
 
 import secrets
+from collections.abc import Sequence
 
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.consumer_group import (
@@ -9,6 +10,14 @@ from streamsage.domain.entities.consumer_group import (
     ConsumerGroupSummary,
     GroupMember,
     TopicPartitionRef,
+)
+from streamsage.domain.entities.message import (
+    MessageReadResult,
+    OffsetRange,
+    PartitionOffsets,
+    RawHeader,
+    RawMessage,
+    TimestampType,
 )
 from streamsage.domain.entities.topic import Partition, Topic
 from streamsage.domain.exceptions import KafkaResourceNotFoundError
@@ -156,3 +165,69 @@ class FakeConsumerGroupReader:
     def get_consumer_lag(self, group_id: str) -> list[PartitionLag]:
         self.describe_consumer_group(group_id)
         return list(self.lag)
+
+
+def raw_message(
+    partition: int,
+    offset: int,
+    value: bytes | None = b'{"ok":true}',
+    timestamp_ms: int | None = None,
+    topic: str = "orders",
+) -> RawMessage:
+    return RawMessage(
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        timestamp_ms=1_700_000_000_000 + offset
+        if timestamp_ms is None
+        else timestamp_ms,
+        timestamp_type=TimestampType.CREATE_TIME,
+        key=f"k-{offset}".encode(),
+        value=value,
+        headers=(RawHeader("trace-id", b"t"),),
+    )
+
+
+class FakeMessageReader:
+    """Serves messages from an in-memory log, honoring the requested ranges."""
+
+    def __init__(
+        self,
+        offsets: list[PartitionOffsets] | None = None,
+        messages: list[RawMessage] | None = None,
+        complete: bool = True,
+        error: Exception | None = None,
+    ) -> None:
+        self.offsets = (
+            [PartitionOffsets(0, 0, 10), PartitionOffsets(1, 0, 4)]
+            if offsets is None
+            else offsets
+        )
+        self.messages = (
+            [raw_message(0, o) for o in range(10)]
+            + [raw_message(1, o) for o in range(4)]
+            if messages is None
+            else messages
+        )
+        self.complete = complete
+        self.error = error
+        self.requested_ranges: list[tuple[OffsetRange, ...]] = []
+
+    def partition_offsets(self, topic: str) -> list[PartitionOffsets]:
+        if self.error is not None:
+            raise self.error
+        if topic == "missing":
+            raise KafkaResourceNotFoundError(f"Topic '{topic}' does not exist.")
+        return list(self.offsets)
+
+    def read_range(
+        self, topic: str, ranges: Sequence[OffsetRange]
+    ) -> MessageReadResult:
+        self.requested_ranges.append(tuple(ranges))
+        selected = tuple(
+            m
+            for m in self.messages
+            for r in ranges
+            if m.partition == r.partition and r.start <= m.offset < r.stop
+        )
+        return MessageReadResult(messages=selected, complete=self.complete)
