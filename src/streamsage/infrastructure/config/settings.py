@@ -7,7 +7,7 @@ MCP clients can never supply or override Kafka credentials per tool call.
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from streamsage.domain.diagnostics.catalog import ALL_FINDING_CODES
@@ -20,6 +20,18 @@ SecurityProtocol = Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"]
 # additional configuration and are not supported yet.
 SaslMechanism = Literal["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+Transport = Literal["stdio", "http"]
+# Must match streamsage.presentation.mcp.authorization (checked by a test).
+HttpScope = Literal["kafka:metadata", "kafka:messages"]
+
+
+class HttpTokenSetting(BaseModel):
+    """One accepted bearer token, identified by its SHA-256 hash."""
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scopes: list[HttpScope] = Field(min_length=1)
+
 
 _SASL_PROTOCOLS = frozenset({"SASL_PLAINTEXT", "SASL_SSL"})
 _TLS_PROTOCOLS = frozenset({"SSL", "SASL_SSL"})
@@ -46,6 +58,14 @@ class Settings(BaseSettings):
     kafka_socket_timeout: float = Field(default=10, gt=0, le=300)
 
     log_level: LogLevel = "INFO"
+
+    # Transport. "http" serves Streamable HTTP and requires bearer tokens.
+    transport: Transport = "stdio"
+    http_host: str = Field(default="127.0.0.1", min_length=1)
+    http_port: int = Field(default=8000, ge=1, le=65_535)
+    # JSON list of {"name", "sha256", "scopes"}; create with
+    # `streamsage generate-token`. Only hashes are configured, never tokens.
+    http_tokens: list[HttpTokenSetting] = Field(default_factory=list)
     include_internal_topics: bool = False
 
     # Per-partition lag, in messages, used by analyze_consumer_health.
@@ -150,6 +170,14 @@ class Settings(BaseSettings):
             DlqTopicMatcher(self.dlq_topic_patterns)
         except InvalidInputError as exc:
             raise ValueError(f"STREAMSAGE_DLQ_TOPICS: {exc}") from None
+        if self.transport == "http" and not self.http_tokens:
+            raise ValueError(
+                "STREAMSAGE_TRANSPORT=http requires at least one token in "
+                "STREAMSAGE_HTTP_TOKENS (create one with `streamsage generate-token`)"
+            )
+        names = [token.name for token in self.http_tokens]
+        if len(names) != len(set(names)):
+            raise ValueError("STREAMSAGE_HTTP_TOKENS names must be unique")
         if self.message_default_limit > self.message_max_limit:
             raise ValueError(
                 "STREAMSAGE_MESSAGE_DEFAULT_LIMIT must not exceed "
@@ -184,3 +212,7 @@ class Settings(BaseSettings):
     @property
     def dlq_topic_patterns(self) -> tuple[str, ...]:
         return tuple(p.strip() for p in self.dlq_topics.split(",") if p.strip())
+
+    @property
+    def http_is_loopback(self) -> bool:
+        return self.http_host.lower() in _LOOPBACK_HOSTS

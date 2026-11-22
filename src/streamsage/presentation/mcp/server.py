@@ -28,6 +28,7 @@ from streamsage.application.use_cases.list_consumer_groups import (
 )
 from streamsage.application.use_cases.list_dlq_topics import ListDlqTopicsUseCase
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
+from streamsage.presentation.mcp.authorization import ScopeAuthorizationMiddleware
 from streamsage.presentation.mcp.prompts.diagnostics_prompts import (
     register_diagnostics_prompts,
 )
@@ -79,6 +80,8 @@ def create_server(
         description="AI-powered Kafka observability and troubleshooting.",
         instructions=INSTRUCTIONS,
         version=__version__,
+        # Enforces per-tool scopes on HTTP requests; a no-op over stdio.
+        middleware=[ScopeAuthorizationMiddleware()],
     )
     register_cluster_tools(server, get_cluster_info_use_case)
     register_topic_tools(

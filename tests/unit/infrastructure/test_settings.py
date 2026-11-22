@@ -231,3 +231,50 @@ def test_key_search_and_dlq_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_invalid_dlq_pattern_is_rejected() -> None:
     with pytest.raises(ValidationError, match="STREAMSAGE_DLQ_TOPICS"):
         Settings(dlq_topics="orders dlq")
+
+
+def test_stdio_is_the_default_transport() -> None:
+    settings = Settings()
+    assert settings.transport == "stdio"
+    assert (settings.http_host, settings.http_port) == ("127.0.0.1", 8000)
+    assert settings.http_is_loopback is True
+
+
+def test_http_tokens_from_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    digest = "a" * 64
+    monkeypatch.setenv("STREAMSAGE_TRANSPORT", "http")
+    monkeypatch.setenv(
+        "STREAMSAGE_HTTP_TOKENS",
+        f'[{{"name": "ci", "sha256": "{digest}", "scopes": ["kafka:metadata"]}}]',
+    )
+    settings = Settings()
+    assert settings.transport == "http"
+    assert settings.http_tokens[0].sha256 == digest
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        [{"name": "x", "sha256": "A" * 64, "scopes": ["kafka:metadata"]}],  # uppercase
+        [{"name": "x", "sha256": "a" * 63, "scopes": ["kafka:metadata"]}],
+        [{"name": "x", "sha256": "a" * 64, "scopes": []}],
+        [{"name": "x", "sha256": "a" * 64, "scopes": ["kafka:admin"]}],
+        [{"name": "bad name", "sha256": "a" * 64, "scopes": ["kafka:metadata"]}],
+        [
+            {"name": "x", "sha256": "a" * 64, "scopes": ["kafka:metadata"]},
+            {"name": "x", "sha256": "b" * 64, "scopes": ["kafka:metadata"]},
+        ],
+    ],
+)
+def test_invalid_http_tokens(tokens: list[dict[str, object]]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(transport="http", http_tokens=tokens)  # type: ignore[arg-type]
+
+
+def test_http_transport_requires_tokens() -> None:
+    with pytest.raises(ValidationError, match="requires at least one token"):
+        Settings(transport="http")
+
+
+def test_non_loopback_http_host_is_detected() -> None:
+    assert Settings(http_host="0.0.0.0").http_is_loopback is False

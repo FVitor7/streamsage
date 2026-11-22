@@ -7,9 +7,8 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M4 — Message Intelligence**: bounded, sanitized message
-> inspection, key search and configurable DLQ topics. See the
-> [roadmap](#roadmap).
+> Status: **M5 — Production Readiness** in progress: Streamable HTTP with
+> bearer tokens and per-tool scopes is available. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -116,6 +115,35 @@ after `docker compose up -d`.
 
 Stop Kafka with `docker compose down` (add `-v` to delete its data volume).
 
+## HTTP transport
+
+StreamSage speaks stdio by default. To serve several clients, or a client on
+another machine, run it over **Streamable HTTP** with bearer tokens:
+
+```bash
+# 1. Create a token. Only its SHA-256 hash goes into the server config.
+uv run streamsage generate-token --name claude-code --scope kafka:metadata --scope kafka:messages
+
+# 2. Start the server with the printed entry
+STREAMSAGE_TRANSPORT=http \
+STREAMSAGE_HTTP_TOKENS='[{"name": "claude-code", "sha256": "<hash>", "scopes": ["kafka:metadata", "kafka:messages"]}]' \
+uv run streamsage
+
+# 3. Point a client at it
+claude mcp add --transport http streamsage http://127.0.0.1:8000/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+| Scope            | Grants                                                                   |
+| ---------------- | ------------------------------------------------------------------------ |
+| `kafka:metadata` | Cluster, topics, consumer groups, lag, health, stalled partitions, DLQs, resources |
+| `kafka:messages` | `inspect_messages`, `find_messages_by_key`                               |
+
+A client only sees the tools its token allows. HTTP mode refuses to start
+without at least one token. It binds to `127.0.0.1` by default; to expose
+it, set `STREAMSAGE_HTTP_HOST` and put a TLS-terminating reverse proxy in
+front, because StreamSage serves plain HTTP.
+
 ## Kafka configuration
 
 StreamSage reads its configuration from environment variables prefixed with
@@ -133,6 +161,9 @@ StreamSage reads its configuration from environment variables prefixed with
 | `STREAMSAGE_KAFKA_REQUEST_TIMEOUT`    | `10`             | Seconds; upper bound for each metadata request       |
 | `STREAMSAGE_KAFKA_SOCKET_TIMEOUT`     | `10`             | Seconds                                              |
 | `STREAMSAGE_LOG_LEVEL`                | `INFO`           | Logs go to stderr as JSON lines                      |
+| `STREAMSAGE_TRANSPORT`                | `stdio`          | `stdio` or `http` (Streamable HTTP)                  |
+| `STREAMSAGE_HTTP_HOST` / `_PORT`      | `127.0.0.1` / `8000` | HTTP listen address (path `/mcp`)                |
+| `STREAMSAGE_HTTP_TOKENS`              | `[]`             | JSON list of `{name, sha256, scopes}`; required for HTTP |
 | `STREAMSAGE_INCLUDE_INTERNAL_TOPICS`  | `false`          | Default for `list_topics` and `kafka://topics`       |
 | `STREAMSAGE_LAG_WARNING_THRESHOLD`    | `1000`           | Per-partition lag (messages) for a `warning` finding |
 | `STREAMSAGE_LAG_CRITICAL_THRESHOLD`   | `10000`          | Per-partition lag for `critical`; must be ≥ warning  |
@@ -205,8 +236,9 @@ Then ask things like *"What topics are available in this cluster?"*,
 - **No secret leakage.** Passwords are `SecretStr`. Logs, tool errors and
   resources never include credentials, and clients never see stack traces.
 - **Bounded.** Every Kafka call has an explicit timeout.
-- **stdio transport only** in M1. Streamable HTTP (with authentication) is
-  planned for M5.
+- **Transports.** stdio (local process) or Streamable HTTP with bearer
+  tokens, stored as SHA-256 hashes and compared in constant time, plus
+  per-tool scopes. Token values are never logged.
 
 See [docs/security.md](docs/security.md).
 
@@ -233,7 +265,8 @@ excluded by default. See [docs/development.md](docs/development.md).
   detection by comparing offsets over time
 - **M4 — Message Intelligence** ✅ bounded, sanitized message inspection,
   key search and configurable DLQ topics
-- **M5 — Production Readiness**: Streamable HTTP with auth, metrics, v1.0
+- **M5 — Production Readiness**: Streamable HTTP with bearer tokens and
+  scopes ✅; Prometheus metrics and the v1.0 release next
 
 ## Contributing
 
