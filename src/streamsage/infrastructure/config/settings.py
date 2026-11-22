@@ -12,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from streamsage.domain.diagnostics.catalog import ALL_FINDING_CODES
 from streamsage.domain.diagnostics.severity import Severity
+from streamsage.domain.exceptions import InvalidInputError
+from streamsage.domain.messages.dlq import DlqTopicMatcher
 
 SecurityProtocol = Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"]
 # Mechanisms that only need username/password. GSSAPI and OAUTHBEARER need
@@ -61,6 +63,12 @@ class Settings(BaseSettings):
     message_max_limit: int = Field(default=100, ge=1, le=1_000)
     # Extra field/header names to redact, comma-separated (added to defaults).
     message_sensitive_fields: str = ""
+    # Key search scans at most this many of the newest messages.
+    message_key_search_max_per_partition: int = Field(default=1_000, ge=1, le=100_000)
+    message_key_search_max_total: int = Field(default=10_000, ge=1, le=1_000_000)
+
+    # DLQ topics: exact names and/or glob patterns, comma-separated.
+    dlq_topics: str = ""
 
     @field_validator(
         "kafka_sasl_mechanism",
@@ -138,6 +146,10 @@ class Settings(BaseSettings):
             and not Path(self.kafka_ssl_ca_location).is_file()
         ):
             raise ValueError("STREAMSAGE_KAFKA_SSL_CA_LOCATION is not a readable file")
+        try:
+            DlqTopicMatcher(self.dlq_topic_patterns)
+        except InvalidInputError as exc:
+            raise ValueError(f"STREAMSAGE_DLQ_TOPICS: {exc}") from None
         if self.message_default_limit > self.message_max_limit:
             raise ValueError(
                 "STREAMSAGE_MESSAGE_DEFAULT_LIMIT must not exceed "
@@ -168,3 +180,7 @@ class Settings(BaseSettings):
             for name in self.message_sensitive_fields.split(",")
             if name.strip()
         )
+
+    @property
+    def dlq_topic_patterns(self) -> tuple[str, ...]:
+        return tuple(p.strip() for p in self.dlq_topics.split(",") if p.strip())

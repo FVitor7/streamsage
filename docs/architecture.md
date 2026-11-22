@@ -185,6 +185,23 @@ rest of the server:
   timeout), and closes the consumer. A timeout yields a partial result
   marked `complete: false`.
 
+**Key search.** Kafka has no index by key, so `find_messages_by_key` scans
+the newest messages of each partition. The total budget is split evenly
+across the selected partitions and capped per partition
+(`plan_key_scan`). The response reports each partition's scanned range and
+whether it reached the oldest available message; `searched_whole_topic`
+is true only if every partition was covered entirely and the scan
+completed. A "no match" with partial coverage is reported as exactly that,
+not as "the key does not exist". The adapter keeps only the newest N
+matches per partition while scanning.
+
+**DLQ topics.** There is no universal DLQ naming convention. A topic is a DLQ
+only if it matches `STREAMSAGE_DLQ_TOPICS` (exact names or glob patterns,
+case-sensitive). Without that setting, `list_dlq_topics` says so explicitly
+instead of guessing. Message counts are upper bounds from offsets: compaction
+and transaction markers can leave gaps. To read DLQ messages, including
+error headers, use `inspect_messages`.
+
 See [security.md](security.md#data-protection) for the privacy rules and
 their limits.
 

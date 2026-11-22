@@ -71,3 +71,59 @@ def _select(
 
 def _list(partitions: Sequence[int]) -> str:
     return ", ".join(str(p) for p in sorted(partitions)) or "none"
+
+
+@dataclass(frozen=True, slots=True)
+class ScanCoverage:
+    """What part of a partition a bounded scan covers."""
+
+    partition: int
+    from_offset: int
+    to_offset: int  # exclusive
+    first_available_offset: int
+
+    @property
+    def scanned_count(self) -> int:
+        return max(self.to_offset - self.from_offset, 0)
+
+    @property
+    def reaches_start(self) -> bool:
+        """True if every message currently in the partition is covered."""
+        return self.from_offset <= self.first_available_offset
+
+
+@dataclass(frozen=True, slots=True)
+class ScanPlan:
+    ranges: tuple[OffsetRange, ...]
+    coverage: tuple[ScanCoverage, ...]
+    per_partition_limit: int
+
+
+def plan_key_scan(
+    offsets: Sequence[PartitionOffsets],
+    max_per_partition: int,
+    max_total: int,
+    partition: int | None = None,
+) -> ScanPlan:
+    """Scan the newest messages of each partition, within both budgets.
+
+    The total budget is split evenly across the selected partitions, so a
+    topic with many partitions scans fewer messages per partition.
+    """
+    selected = _select(offsets, partition)
+    per_partition = max(1, min(max_per_partition, max_total // max(len(selected), 1)))
+    coverage = tuple(
+        ScanCoverage(
+            partition=p.partition,
+            from_offset=max(p.high - per_partition, p.low),
+            to_offset=p.high,
+            first_available_offset=p.low,
+        )
+        for p in selected
+    )
+    ranges = tuple(
+        OffsetRange(c.partition, c.from_offset, c.to_offset)
+        for c in coverage
+        if c.scanned_count > 0
+    )
+    return ScanPlan(ranges, coverage, per_partition)

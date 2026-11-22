@@ -8,6 +8,8 @@
 #   inventory.updated   1 partition,  20 messages
 #   customers.updated   1 partition,  3 JSON messages with fake personal data
 #                       and an Authorization header (exercises sanitization)
+#   orders.created.DLQ  1 partition,  2 failed orders with error headers
+#                       (a DLQ only when STREAMSAGE_DLQ_TOPICS matches it)
 #
 # Consumer groups (committed offsets set explicitly, so lag is deterministic):
 #   orders-service    orders.created, committed offset 40 on every partition
@@ -57,10 +59,13 @@ group_exists() {
     grep -qx "$1"
 }
 
-create_topic orders.created 3
-create_topic payments.processed 2
-create_topic inventory.updated 1
-create_topic customers.updated 1
+# Each Kafka CLI call starts a JVM (several seconds), so create in parallel.
+create_topic orders.created 3 &
+create_topic payments.processed 2 &
+create_topic inventory.updated 1 &
+create_topic customers.updated 1 &
+create_topic orders.created.DLQ 1 &
+wait
 
 if group_exists orders-service; then
   echo "Sample data already seeded; skipping."
@@ -90,7 +95,17 @@ if topic_is_empty customers.updated; then
   echo "Seeded customers.updated."
 fi
 
+if topic_is_empty orders.created.DLQ; then
+  printf '%s\n' \
+    'error.class:InvalidOrderException,error.message:order total is negative,original.offset:17|key-17|{"seq":17,"total":-5}' \
+    'error.class:DeserializationException,error.message:unexpected end of input,original.offset:42|key-42|{"seq":42,"tot' |
+    "$BIN/kafka-console-producer.sh" --bootstrap-server "$BOOTSTRAP_SERVER" \
+      --topic orders.created.DLQ \
+      --property parse.headers=true --property headers.delimiter='|' \
+      --property headers.separator=, --property headers.key.separator=: \
+      --property parse.key=true --property key.separator='|' > /dev/null
+  echo "Seeded orders.created.DLQ."
+fi
+
 echo "Topics:"
 "$BIN/kafka-topics.sh" --bootstrap-server "$BOOTSTRAP_SERVER" --list
-echo "Consumer groups:"
-"$BIN/kafka-consumer-groups.sh" --bootstrap-server "$BOOTSTRAP_SERVER" --list

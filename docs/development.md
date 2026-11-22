@@ -103,6 +103,7 @@ data volume:
 | `payments.processed` | 2          | 50       |
 | `inventory.updated`  | 1          | 20       |
 | `customers.updated`  | 1          | 3 (fake personal data + `Authorization` header, for sanitization tests) |
+| `orders.created.DLQ` | 1          | 2 failed orders with `error.*` headers (a DLQ when `STREAMSAGE_DLQ_TOPICS=*.DLQ`) |
 
 | Consumer group      | State         | Lag                                                   |
 | ------------------- | ------------- | ----------------------------------------------------- |

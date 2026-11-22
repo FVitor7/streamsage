@@ -29,7 +29,11 @@ PAIRS = [
         KafkaConsumerGroupAdapter,
         ["list_consumer_groups", "describe_consumer_group", "get_consumer_lag"],
     ),
-    (MessageReader, KafkaMessageAdapter, ["partition_offsets", "read_range"]),
+    (
+        MessageReader,
+        KafkaMessageAdapter,
+        ["partition_offsets", "read_range", "find_by_key"],
+    ),
 ]
 
 

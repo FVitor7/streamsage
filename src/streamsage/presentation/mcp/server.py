@@ -17,12 +17,16 @@ from streamsage.application.use_cases.describe_topic import DescribeTopicUseCase
 from streamsage.application.use_cases.detect_stalled_partitions import (
     DetectStalledPartitionsUseCase,
 )
+from streamsage.application.use_cases.find_messages_by_key import (
+    FindMessagesByKeyUseCase,
+)
 from streamsage.application.use_cases.get_cluster_info import GetClusterInfoUseCase
 from streamsage.application.use_cases.get_consumer_lag import GetConsumerLagUseCase
 from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
 from streamsage.application.use_cases.list_consumer_groups import (
     ListConsumerGroupsUseCase,
 )
+from streamsage.application.use_cases.list_dlq_topics import ListDlqTopicsUseCase
 from streamsage.application.use_cases.list_topics import ListTopicsUseCase
 from streamsage.presentation.mcp.prompts.diagnostics_prompts import (
     register_diagnostics_prompts,
@@ -43,8 +47,9 @@ list_topics and describe_topic to explore the cluster, and
 list_consumer_groups, describe_consumer_group, get_consumer_lag and
 analyze_consumer_health to inspect consumers. Lag is a single snapshot: high
 lag alone does not prove a consumer is stuck; detect_stalled_partitions
-compares offsets over time. inspect_messages reads a bounded, sanitized
-sample of messages. No tool can modify the cluster. Distinguish
+compares offsets over time. inspect_messages and find_messages_by_key read a
+bounded, sanitized sample of messages, and list_dlq_topics lists the
+configured dead letter queues. No tool can modify the cluster. Distinguish
 observed data from hypotheses, and never state a root cause the evidence
 does not establish.
 """
@@ -61,6 +66,8 @@ def create_server(
     analyze_consumer_health_use_case: AnalyzeConsumerHealthUseCase,
     detect_stalled_partitions_use_case: DetectStalledPartitionsUseCase,
     inspect_messages_use_case: InspectMessagesUseCase,
+    find_messages_by_key_use_case: FindMessagesByKeyUseCase,
+    list_dlq_topics_use_case: ListDlqTopicsUseCase,
     message_default_limit: int = 20,
     message_max_limit: int = 100,
     message_payloads_enabled: bool = False,
@@ -91,6 +98,8 @@ def create_server(
     register_message_tools(
         server,
         inspect_messages_use_case,
+        find_messages_by_key_use_case,
+        list_dlq_topics_use_case,
         default_limit=message_default_limit,
         max_limit=message_max_limit,
         payloads_enabled=message_payloads_enabled,

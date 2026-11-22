@@ -24,6 +24,7 @@ SAMPLE_TOPICS = {
     "payments.processed": 2,
     "inventory.updated": 1,
     "customers.updated": 1,
+    "orders.created.DLQ": 1,
 }
 
 

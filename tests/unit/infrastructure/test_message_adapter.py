@@ -314,3 +314,54 @@ def test_consumer_factory_rejected_config(
     monkeypatch.setattr(consumer_module, "Consumer", fail)
     with pytest.raises(ConfigurationError, match="rejected the configuration"):
         KafkaConsumerFactory(Settings()).create(KafkaErrorEvents())
+
+
+def test_find_by_key_keeps_only_newest_matches_per_partition() -> None:
+    def keyed(partition: int, offset: int, key: bytes) -> Message:
+        return Message(
+            topic="t",
+            partition=partition,
+            offset=offset,
+            key=key,
+            value=b"v",
+            timestamp=(TIMESTAMP_CREATE_TIME, offset),
+        )
+
+    consumer = FakeConsumer(
+        [
+            keyed(0, 0, b"a"),
+            keyed(0, 1, b"b"),
+            keyed(0, 2, b"a"),
+            keyed(1, 0, b"a"),
+            keyed(0, 3, b"a"),
+            keyed(1, 1, b"c"),
+        ]
+    )
+    adapter, _ = _adapter(consumer)
+    result = adapter.find_by_key(
+        "t", [OffsetRange(0, 0, 4), OffsetRange(1, 0, 2)], b"a", 2
+    )
+    assert result.scanned == 6
+    assert result.complete is True
+    assert sorted((m.partition, m.offset) for m in result.matches) == [
+        (0, 2),
+        (0, 3),
+        (1, 0),
+    ]
+    assert consumer.closed is True
+
+
+def test_find_by_key_with_nothing_to_scan() -> None:
+    adapter, factory = _adapter(FakeConsumer())
+    result = adapter.find_by_key("t", [OffsetRange(0, 4, 4)], b"a", 5)
+    assert (result.matches, result.scanned, result.complete) == ((), 0, True)
+    assert factory.created == 0
+
+
+def test_find_by_key_failures_are_translated() -> None:
+    fatal = KafkaError(KafkaError._TRANSPORT, fatal=True)
+    consumer = FakeConsumer([Message(topic="t", partition=0, error=fatal)])
+    adapter, _ = _adapter(consumer)
+    with pytest.raises(KafkaConnectionError):
+        adapter.find_by_key("t", [OffsetRange(0, 0, 5)], b"a", 5)
+    assert consumer.closed is True

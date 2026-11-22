@@ -1,6 +1,7 @@
 import logging
 import time
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
 
 from confluent_kafka import (
     TIMESTAMP_CREATE_TIME,
@@ -15,6 +16,7 @@ from confluent_kafka import (
 from confluent_kafka.admin._topic import TopicDescription
 
 from streamsage.domain.entities.message import (
+    KeyScanResult,
     MessageReadResult,
     OffsetRange,
     PartitionOffsets,
@@ -88,14 +90,83 @@ class KafkaMessageAdapter:
         finally:
             consumer.close()
 
+    def find_by_key(
+        self,
+        topic: str,
+        ranges: Sequence[OffsetRange],
+        key: bytes,
+        max_matches_per_partition: int,
+    ) -> KeyScanResult:
+        wanted = {r.partition: r for r in ranges if r.size > 0}
+        if not wanted:
+            return KeyScanResult(matches=(), scanned=0, complete=True)
+        newest: dict[int, deque[RawMessage]] = {
+            p: deque(maxlen=max_matches_per_partition) for p in wanted
+        }
+        scanned = 0
+
+        def keep_matches(message: Message) -> None:
+            nonlocal scanned
+            scanned += 1
+            if message.key() == key:
+                newest[message.partition() or 0].append(to_raw_message(message, topic))
+
+        events = KafkaErrorEvents()
+        consumer = self._consumer_factory.create(events)
+        try:
+            complete = self._consume(consumer, topic, wanted, keep_matches)
+        except KafkaException as exc:
+            raise self._failure(exc, consumer, events, "key search") from exc
+        finally:
+            consumer.close()
+        matches = tuple(m for partition in newest.values() for m in partition)
+        logger.info(
+            "key search finished",
+            extra={
+                "event": {
+                    "partitions": len(wanted),
+                    "scanned": scanned,
+                    "matches": len(matches),
+                    "complete": complete,
+                }
+            },
+        )
+        return KeyScanResult(matches=matches, scanned=scanned, complete=complete)
+
     def _read(
         self, consumer: Consumer, topic: str, wanted: dict[int, OffsetRange]
     ) -> MessageReadResult:
+        messages: list[RawMessage] = []
+        complete = self._consume(
+            consumer, topic, wanted, lambda m: messages.append(to_raw_message(m, topic))
+        )
+        logger.info(
+            "messages read",
+            extra={
+                "event": {
+                    "partitions": len(wanted),
+                    "messages": len(messages),
+                    "complete": complete,
+                }
+            },
+        )
+        return MessageReadResult(messages=tuple(messages), complete=complete)
+
+    def _consume(
+        self,
+        consumer: Consumer,
+        topic: str,
+        wanted: dict[int, OffsetRange],
+        on_message: Callable[[Message], None],
+    ) -> bool:
+        """Deliver every message in the ranges to ``on_message``.
+
+        Returns True if every range was fully read before the timeout.
+        """
         consumer.assign(
             [TopicPartition(topic, p, r.start) for p, r in sorted(wanted.items())]
         )
         pending = set(wanted)
-        messages: list[RawMessage] = []
         deadline = time.monotonic() + self._timeout_seconds
         while pending:
             remaining = deadline - time.monotonic()
@@ -119,20 +190,10 @@ class KafkaMessageAdapter:
             if offset is None or offset >= stop:
                 pending.discard(partition)
                 continue
-            messages.append(to_raw_message(message, topic))
+            on_message(message)
             if offset >= stop - 1:
                 pending.discard(partition)
-        logger.info(
-            "messages read",
-            extra={
-                "event": {
-                    "partitions": len(wanted),
-                    "messages": len(messages),
-                    "complete": not pending,
-                }
-            },
-        )
-        return MessageReadResult(messages=tuple(messages), complete=not pending)
+        return not pending
 
     def _failure(
         self,

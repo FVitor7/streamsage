@@ -7,9 +7,9 @@ server, written in Python, that lets AI agents and other MCP clients explore
 Apache Kafka clusters: cluster metadata, topics, partitions, leaders and
 in-sync replicas. It is **read-only by design**.
 
-> Status: **M4 — Message Intelligence** in progress: bounded, sanitized
-> message inspection is available; key search and DLQ support are next. See
-> the [roadmap](#roadmap).
+> Status: **M4 — Message Intelligence**: bounded, sanitized message
+> inspection, key search and configurable DLQ topics. See the
+> [roadmap](#roadmap).
 
 ## Why
 
@@ -35,6 +35,8 @@ will also return deterministic, evidence-based diagnostics.
 | Tool     | `analyze_consumer_health`   | healthy / warning / critical / unknown, with evidence-backed findings and limitations |
 | Tool     | `detect_stalled_partitions` | Samples offsets twice (`interval_seconds`, 1–60) and reports partitions that did not advance |
 | Tool     | `inspect_messages`          | Newest (or from an offset) messages: key, headers, timestamp, offset, size; payload only if enabled, sanitized |
+| Tool     | `find_messages_by_key`      | Newest messages with an exact key, scanning bounded ranges and reporting coverage |
+| Tool     | `list_dlq_topics`           | Topics matching `STREAMSAGE_DLQ_TOPICS`, with approximate message counts |
 | Resource | `kafka://cluster/info`      | Cluster info as JSON                                            |
 | Resource | `kafka://topics`            | Topic list as JSON                                              |
 | Prompt   | `investigate_kafka_cluster` | Guided, evidence-based investigation (optional `focus_topic`)   |
@@ -140,6 +142,9 @@ StreamSage reads its configuration from environment variables prefixed with
 | `STREAMSAGE_MESSAGE_DEFAULT_LIMIT`    | `20`             | Messages per `inspect_messages` call by default      |
 | `STREAMSAGE_MESSAGE_MAX_LIMIT`        | `100`            | Maximum messages per call (≤ 1000)                   |
 | `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` | –                | Extra field/header names to redact, comma-separated  |
+| `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION` | `1000` | Newest messages scanned per partition by key search |
+| `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` | `10000`      | Total key search budget, split across partitions     |
+| `STREAMSAGE_DLQ_TOPICS`               | –                | DLQ topic names/glob patterns, e.g. `*.DLQ,dead-letter-*` |
 
 The server checks for inconsistent settings at startup, for example a SASL
 protocol without credentials, or credentials without a SASL protocol. If it
@@ -226,8 +231,8 @@ excluded by default. See [docs/development.md](docs/development.md).
 - **M3 — Diagnostics Engine** ✅ structured findings with evidence,
   hypotheses and recommendations; configurable severity; stalled-partition
   detection by comparing offsets over time
-- **M4 — Message Intelligence**: bounded, sanitized message inspection ✅;
-  key search and configurable DLQ topics next
+- **M4 — Message Intelligence** ✅ bounded, sanitized message inspection,
+  key search and configurable DLQ topics
 - **M5 — Production Readiness**: Streamable HTTP with auth, metrics, v1.0
 
 ## Contributing

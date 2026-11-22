@@ -217,3 +217,17 @@ def test_extra_sensitive_fields_are_parsed(monkeypatch: pytest.MonkeyPatch) -> N
 def test_invalid_message_limits(overrides: dict[str, int]) -> None:
     with pytest.raises(ValidationError):
         Settings(**overrides)  # type: ignore[arg-type]
+
+
+def test_key_search_and_dlq_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings()
+    assert settings.message_key_search_max_per_partition == 1_000
+    assert settings.message_key_search_max_total == 10_000
+    assert settings.dlq_topic_patterns == ()
+    monkeypatch.setenv("STREAMSAGE_DLQ_TOPICS", " *.DLQ , dead-letter-*,")
+    assert Settings().dlq_topic_patterns == ("*.DLQ", "dead-letter-*")
+
+
+def test_invalid_dlq_pattern_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="STREAMSAGE_DLQ_TOPICS"):
+        Settings(dlq_topics="orders dlq")

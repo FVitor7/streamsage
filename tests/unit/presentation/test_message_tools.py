@@ -120,3 +120,79 @@ async def test_missing_topic_and_errors_are_controlled(client: Client) -> None:
         result = await c.call_tool("inspect_messages", {"topic_name": "orders"})
     assert result.is_error is True
     assert "Could not connect." in _text(result)
+
+
+@pytest.mark.anyio
+async def test_find_messages_by_key() -> None:
+    from streamsage.domain.entities.message import PartitionOffsets
+    from tests.fakes import raw_message
+
+    messages = [raw_message(0, o) for o in range(6)]
+    reader = FakeMessageReader(offsets=[PartitionOffsets(0, 0, 6)], messages=messages)
+    async with Client(build(message_reader=reader)) as c:
+        result = await c.call_tool(
+            "find_messages_by_key", {"topic_name": "orders", "key": "k-4"}
+        )
+    data = result.structured_content
+    assert data is not None
+    assert data["match_count"] == 1
+    assert data["matches"][0]["offset"] == 4
+    assert data["scanned"] == 6
+    assert data["searched_whole_topic"] is True
+    assert data["payloads_included"] is False
+    assert data["coverage"] == [
+        {
+            "partition": 0,
+            "from_offset": 0,
+            "to_offset": 6,
+            "scanned_count": 6,
+            "reaches_start": True,
+        }
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"topic_name": "orders"},
+        {"topic_name": "orders", "key": ""},
+        {"topic_name": "orders", "key": "x" * 1025},
+        {"topic_name": "orders", "key": "k", "limit": 0},
+        {"topic_name": "orders", "key": "k", "partition": -1},
+    ],
+)
+async def test_find_messages_by_key_rejects_invalid_arguments(
+    client: Client, arguments: dict[str, Any]
+) -> None:
+    result = await client.call_tool("find_messages_by_key", arguments)
+    assert result.is_error is True
+
+
+@pytest.mark.anyio
+async def test_list_dlq_topics_unconfigured(client: Client) -> None:
+    result = await client.call_tool("list_dlq_topics", {})
+    data = result.structured_content
+    assert data is not None
+    assert data["configured"] is False
+    assert data["topics"] == []
+    assert "STREAMSAGE_DLQ_TOPICS" in data["notes"][0]
+
+
+@pytest.mark.anyio
+async def test_list_dlq_topics_configured() -> None:
+    from streamsage.domain.entities.message import PartitionOffsets
+    from tests.fakes import FakeTopicReader, make_topic
+
+    topics = FakeTopicReader([make_topic("orders"), make_topic("orders.DLQ")])
+    reader = FakeMessageReader(offsets=[PartitionOffsets(0, 3, 10)])
+    async with Client(
+        build(topic_reader=topics, message_reader=reader, dlq_patterns=("*.DLQ",))
+    ) as c:
+        result = await c.call_tool("list_dlq_topics", {})
+    assert result.structured_content == {
+        "configured": True,
+        "patterns": ["*.DLQ"],
+        "topics": [{"name": "orders.DLQ", "partition_count": 1, "message_count": 7}],
+        "notes": [],
+    }

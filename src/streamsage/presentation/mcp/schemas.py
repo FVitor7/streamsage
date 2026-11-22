@@ -505,3 +505,46 @@ class MessageInspectionResponse(BaseModel):
     complete: bool = Field(description="False if the read stopped early (timeout).")
     notes: list[str]
     messages: list[MessageResponse]
+
+
+class ScanCoverageResponse(BaseModel):
+    partition: int
+    from_offset: int
+    to_offset: int = Field(description="Exclusive.")
+    scanned_count: int
+    reaches_start: bool = Field(
+        description="True if every message currently in the partition was scanned."
+    )
+
+
+class KeySearchResponse(BaseModel):
+    topic: str
+    match_count: int
+    scanned: int = Field(description="Messages read, matching or not.")
+    searched_whole_topic: bool = Field(
+        description=(
+            "True only if every message in the searched partitions was scanned. "
+            "If false, no match does not mean the key is absent."
+        )
+    )
+    per_partition_limit: int
+    complete: bool
+    payloads_included: bool
+    coverage: list[ScanCoverageResponse]
+    notes: list[str]
+    matches: list[MessageResponse] = Field(description="Newest first.")
+
+
+class DlqTopicResponse(BaseModel):
+    name: str
+    partition_count: int
+    message_count: int = Field(
+        description="Upper bound from offsets; compaction can make it smaller."
+    )
+
+
+class DlqOverviewResponse(BaseModel):
+    configured: bool
+    patterns: list[str]
+    topics: list[DlqTopicResponse] = Field(description="Most messages first.")
+    notes: list[str]
