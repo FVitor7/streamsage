@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, types and unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/
+      - run: uv run pytest --cov --cov-report=xml --junitxml=junit-unit.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-results-${{ matrix.python-version }}
+          path: |
+            junit-unit.xml
+            coverage.xml
+
+  integration:
+    name: Integration tests (real Kafka)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Start Kafka
+        run: docker compose up -d --wait kafka
+      - name: Create sample topics
+        run: docker compose run --rm kafka-init
+      - run: uv run pytest -m integration --junitxml=junit-integration.xml
+      - name: Kafka logs on failure
+        if: failure()
+        run: docker compose logs kafka
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-results
+          path: junit-integration.xml
+      - name: Stop Kafka
+        if: always()
+        run: docker compose down -v
