@@ -1,5 +1,7 @@
 """Composition root: wires settings, Kafka adapters, use cases and the MCP server."""
 
+import argparse
+import json
 import logging
 import sys
 from collections.abc import Iterator
@@ -51,6 +53,8 @@ from streamsage.infrastructure.kafka.kafka_consumer_group_adapter import (
 )
 from streamsage.infrastructure.kafka.kafka_message_adapter import KafkaMessageAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
+from streamsage.presentation.http.bearer_auth import generate_token, hash_token
+from streamsage.presentation.mcp.authorization import ALL_SCOPES
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
 
@@ -148,7 +152,15 @@ def _exit_with_config_error(details: str) -> NoReturn:
     raise SystemExit(EXIT_CONFIG_ERROR) from None
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    if args.command == "generate-token":
+        _print_new_token(args.name, args.scope or [])
+        return
+    serve()
+
+
+def serve() -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
     if settings.uses_unencrypted_remote_connection:
@@ -156,21 +168,88 @@ def main() -> None:
             "Kafka traffic to a non-local broker is not encrypted; "
             "PLAINTEXT/SASL_PLAINTEXT are intended for local development only."
         )
+    if settings.transport == "http" and not settings.http_is_loopback:
+        logger.warning(
+            "The HTTP transport is listening on a non-loopback address without "
+            "TLS; put a TLS-terminating reverse proxy in front of it."
+        )
     logger.info(
         "starting streamsage",
         extra={
             "event": {
-                "transport": "stdio",
+                "transport": settings.transport,
                 "security_protocol": settings.kafka_security_protocol,
             }
         },
     )
     try:
         with build_application(settings) as server:
-            server.run("stdio")
+            if settings.transport == "http":
+                _run_http(server, settings)
+            else:
+                server.run("stdio")
     except ConfigurationError as exc:
         _exit_with_config_error(str(exc))
     logger.info("streamsage stopped")
+
+
+def _run_http(server: MCPServer, settings: Settings) -> None:
+    import uvicorn
+
+    from streamsage.presentation.http.app import MCP_PATH, build_http_app
+
+    logger.info(
+        "serving streamable http",
+        extra={
+            "event": {
+                "host": settings.http_host,
+                "port": settings.http_port,
+                "path": MCP_PATH,
+                "tokens": len(settings.http_tokens),
+            }
+        },
+    )
+    config = uvicorn.Config(
+        build_http_app(server, settings),
+        host=settings.http_host,
+        port=settings.http_port,
+        log_config=None,  # keep StreamSage's JSON logging on stderr
+        lifespan="on",
+        server_header=False,
+    )
+    uvicorn.Server(config).run()
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="streamsage",
+        description="Read-only MCP server for Apache Kafka.",
+    )
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser("serve", help="run the MCP server (default)")
+    token = commands.add_parser(
+        "generate-token", help="create a bearer token for the HTTP transport"
+    )
+    token.add_argument("--name", required=True, help="identifies the token in logs")
+    token.add_argument(
+        "--scope",
+        action="append",
+        choices=sorted(ALL_SCOPES),
+        help="grant a scope (repeatable; default: kafka:metadata)",
+    )
+    return parser.parse_args(argv)
+
+
+def _print_new_token(name: str, scopes: list[str]) -> None:
+    token = generate_token()
+    entry = {
+        "name": name,
+        "sha256": hash_token(token),
+        "scopes": sorted(set(scopes or ["kafka:metadata"])),
+    }
+    print(f"Token (give it to the MCP client; it is not stored anywhere):\n  {token}")
+    print("\nAdd this entry to the STREAMSAGE_HTTP_TOKENS JSON list:")
+    print(f"  {json.dumps(entry)}")
 
 
 if __name__ == "__main__":

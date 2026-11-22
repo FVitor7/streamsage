@@ -205,6 +205,28 @@ error headers, use `inspect_messages`.
 See [security.md](security.md#data-protection) for the privacy rules and
 their limits.
 
+**HTTP transport and authorization.** Static bearer tokens did not fit
+the SDK's built-in auth, which is an OAuth resource server that requires an
+authorization server (`issuer_url`) and would advertise OAuth metadata
+StreamSage cannot honor. Instead, two layers wrap the SDK's Streamable HTTP
+app:
+
+1. `BearerAuthMiddleware` (ASGI, `presentation/http`) authenticates the
+   token and stores a `Principal` (token name and scopes) in the request's
+   ASGI scope.
+2. `ScopeAuthorizationMiddleware` (MCP server middleware,
+   `presentation/mcp/authorization.py`) reads that principal from the
+   request the SDK attaches to each message (`ctx.request`). It enforces
+   `TOOL_SCOPES` on `tools/call`, enforces the metadata scope on resources,
+   and filters `tools/list`.
+
+The principal travels with the request, not in a context variable, because
+the SDK may process messages in a different task than the HTTP request.
+Over stdio, `ctx.request` is `None` and nothing is restricted. With protocol
+`2026-07-28`, the middleware receives already-serialized results (dicts), so
+filtering handles both shapes; an end-to-end test over real HTTP guards
+this.
+
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The
 field is documented as such in the tool's output schema.

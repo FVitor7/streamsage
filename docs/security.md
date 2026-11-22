@@ -60,16 +60,35 @@ please report it.
 
 ## MCP trust considerations
 
-- M1 serves only the **stdio** transport. The MCP client launches the server
-  as a local subprocess, so whoever can run that client can run the tools.
+- With the **stdio** transport, the MCP client launches the server as a
+  local subprocess, so whoever can run that client can run every tool.
+- With **Streamable HTTP** (`STREAMSAGE_TRANSPORT=http`):
+  - Every request needs `Authorization: Bearer <token>`. A missing or wrong
+    token gets `401` with a `WWW-Authenticate: Bearer` challenge, before any
+    MCP processing.
+  - Tokens are random strings (`ssk_` + 256 bits) created by
+    `streamsage generate-token`. The server is configured with their
+    SHA-256 hashes only, and compares in constant time against every
+    configured hash. Token values are never logged; failures log the client
+    address and the reason only.
+  - Each token grants scopes. `kafka:metadata` covers every read of metadata,
+    lag and diagnostics, plus the `kafka://` resources. `kafka:messages`
+    covers the tools that read message contents. Calls without the required
+    scope return an error, unmapped tools are denied (fail closed), and
+    `tools/list` only shows what the token may call.
+  - HTTP mode refuses to start without a token. It binds to `127.0.0.1` by
+    default, where the MCP SDK's DNS-rebinding protection applies.
+    StreamSage serves plain HTTP, so terminate TLS in a reverse proxy before
+    exposing it beyond the host; a warning is logged otherwise.
+  - Rotate a token by adding the new hash, updating clients, then removing
+    the old entry.
 - All tool arguments are validated against typed schemas. Topic names must
   match Kafka's naming rules (`[a-zA-Z0-9._-]`, 1–249 characters). No input
   reaches a shell or a file path.
 - Errors returned to clients contain short, StreamSage-authored messages
   with Kafka error codes. They never include stack traces or raw library
   output.
-- Streamable HTTP will not be exposed beyond localhost until authentication
-  and access control are in place (M5).
+
 
 ## Data protection
 

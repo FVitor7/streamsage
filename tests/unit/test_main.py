@@ -58,7 +58,7 @@ def test_main_exits_cleanly_when_kafka_rejects_configuration(
     monkeypatch.setattr(main_module.KafkaAdminClientFactory, "create", reject)
     monkeypatch.setattr(main_module, "configure_logging", lambda level: None)
     with pytest.raises(SystemExit) as exit_info:
-        main_module.main()
+        main_module.main([])
 
     assert exit_info.value.code == main_module.EXIT_CONFIG_ERROR
     captured = capsys.readouterr()
@@ -78,3 +78,45 @@ def test_unparseable_environment_value_exits_without_leaking_it(
     err = capsys.readouterr().err
     assert "finding_severity_overrides" in err
     assert value not in err
+
+
+def test_generate_token_prints_token_and_matching_entry(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    from streamsage.presentation.http.bearer_auth import hash_token
+
+    main_module.main(
+        [
+            "generate-token",
+            "--name",
+            "ci",
+            "--scope",
+            "kafka:messages",
+            "--scope",
+            "kafka:metadata",
+        ]
+    )
+    lines = [
+        line.strip() for line in capsys.readouterr().out.splitlines() if line.strip()
+    ]
+    token = lines[1]
+    entry = json.loads(lines[-1])
+    assert entry == {
+        "name": "ci",
+        "sha256": hash_token(token),
+        "scopes": ["kafka:messages", "kafka:metadata"],
+    }
+
+
+def test_generate_token_defaults_to_metadata_scope(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main_module.main(["generate-token", "--name", "ci"])
+    assert '"scopes": ["kafka:metadata"]' in capsys.readouterr().out
+
+
+def test_generate_token_rejects_unknown_scope() -> None:
+    with pytest.raises(SystemExit):
+        main_module.main(["generate-token", "--name", "ci", "--scope", "kafka:admin"])
