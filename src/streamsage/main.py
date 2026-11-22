@@ -16,9 +16,9 @@ from streamsage.domain.exceptions import ConfigurationError
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
+from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
-from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
 from streamsage.presentation.mcp.server import create_server
 from streamsage.shared.logging import configure_logging
 
@@ -32,13 +32,13 @@ def build_application(settings: Settings) -> Iterator[MCPServer]:
     """Yield a fully wired server; the Kafka client is closed on exit."""
     error_events = KafkaErrorEvents()
     with KafkaAdminClientFactory(settings).create(error_events) as admin_client:
-        metadata_source = KafkaMetadataSource(
+        gateway = KafkaAdminGateway(
             admin_client,
             timeout_seconds=settings.kafka_request_timeout,
             error_events=error_events,
         )
-        topic_reader = KafkaTopicAdapter(metadata_source)
-        cluster_reader = KafkaClusterAdapter(metadata_source)
+        topic_reader = KafkaTopicAdapter(gateway)
+        cluster_reader = KafkaClusterAdapter(gateway)
         yield create_server(
             get_cluster_info_use_case=GetClusterInfoUseCase(cluster_reader),
             list_topics_use_case=ListTopicsUseCase(topic_reader),

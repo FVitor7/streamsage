@@ -1,25 +1,36 @@
 """Adapter tests using real confluent-kafka metadata classes, without a broker."""
 
+import concurrent.futures
 from typing import Any
 
 import pytest
-from confluent_kafka import KafkaError, KafkaException
+from confluent_kafka import (
+    KafkaError,
+    KafkaException,
+    Node,
+    TopicCollection,
+    TopicPartitionInfo,
+)
 from confluent_kafka.admin._metadata import (
     BrokerMetadata,
     ClusterMetadata,
     PartitionMetadata,
     TopicMetadata,
 )
+from confluent_kafka.admin._topic import TopicDescription
 
 from streamsage.domain.entities.cluster import Broker
 from streamsage.domain.exceptions import (
     KafkaConnectionError,
+    KafkaMetadataError,
+    KafkaOperationTimeoutError,
     KafkaResourceNotFoundError,
 )
+from streamsage.infrastructure.kafka import gateway as gateway_module
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
+from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 from streamsage.infrastructure.kafka.kafka_cluster_adapter import KafkaClusterAdapter
 from streamsage.infrastructure.kafka.kafka_topic_adapter import KafkaTopicAdapter
-from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
 
 
 def _broker(broker_id: int, host: str, port: int) -> BrokerMetadata:
@@ -72,10 +83,14 @@ class FakeAdminClient:
         metadata: ClusterMetadata | None = None,
         error: Exception | None = None,
         queued_events: list[KafkaError] | None = None,
+        descriptions: dict[str, TopicDescription | Exception | None] | None = None,
     ) -> None:
         self.metadata = metadata or _metadata()
         self.error = error
         self.calls: list[dict[str, Any]] = []
+        # Topic name -> description, exception to fail with, or None to hang.
+        self.descriptions = descriptions or {}
+        self.describe_calls: list[dict[str, Any]] = []
         self.queued_events = list(queued_events or [])
         self.error_events: KafkaErrorEvents | None = None
         self.polls = 0
@@ -96,10 +111,47 @@ class FakeAdminClient:
             raise self.error
         return self.metadata
 
+    def describe_topics(
+        self, topics: TopicCollection, **kwargs: Any
+    ) -> dict[str, concurrent.futures.Future[TopicDescription]]:
+        self.describe_calls.append({"topics": topics.topic_names, "kwargs": kwargs})
+        futures: dict[str, concurrent.futures.Future[TopicDescription]] = {}
+        for name in topics.topic_names:
+            future: concurrent.futures.Future[TopicDescription] = (
+                concurrent.futures.Future()
+            )
+            outcome = self.descriptions.get(
+                name, KafkaException(KafkaError(KafkaError.UNKNOWN_TOPIC_OR_PART))
+            )
+            if isinstance(outcome, Exception):
+                future.set_exception(outcome)
+            elif outcome is not None:
+                future.set_result(outcome)
+            futures[name] = future
+        return futures
 
-def _source(admin: FakeAdminClient, timeout: float = 4) -> KafkaMetadataSource:
+
+def _description(
+    name: str, partitions: list[TopicPartitionInfo], *, internal: bool = False
+) -> TopicDescription:
+    return TopicDescription(name, None, internal, partitions)  # type: ignore[arg-type]
+
+
+def _partition_info(
+    pid: int, leader: int | None, replicas: list[int], isr: list[int]
+) -> TopicPartitionInfo:
+    node = None if leader is None else Node(leader, "h", 9092)
+    return TopicPartitionInfo(
+        pid,
+        node,  # type: ignore[arg-type]
+        [Node(r, "h", 9092) for r in replicas],
+        [Node(r, "h", 9092) for r in isr],
+    )
+
+
+def _source(admin: FakeAdminClient, timeout: float = 4) -> KafkaAdminGateway:
     admin.error_events = KafkaErrorEvents()
-    return KafkaMetadataSource(
+    return KafkaAdminGateway(
         admin,  # type: ignore[arg-type]
         timeout_seconds=timeout,
         error_events=admin.error_events,
@@ -120,15 +172,25 @@ def test_cluster_adapter_maps_missing_values_to_none() -> None:
     assert cluster.controller_id is None
 
 
-def test_metadata_is_always_requested_for_all_topics_with_timeout() -> None:
-    admin = FakeAdminClient(_metadata([_topic("orders", [_partition(0, 1, [1], [1])])]))
+def test_requests_never_scope_metadata_to_a_topic_and_carry_timeouts() -> None:
+    admin = FakeAdminClient(
+        _metadata([_topic("orders", [_partition(0, 1, [1], [1])])]),
+        descriptions={
+            "orders": _description("orders", [_partition_info(0, 1, [1], [1])])
+        },
+    )
     adapter = KafkaTopicAdapter(_source(admin, timeout=7))
     adapter.list_topics()
     adapter.describe_topic("orders")
     with pytest.raises(KafkaResourceNotFoundError):
         adapter.describe_topic("missing")
-    # A topic-scoped metadata request could auto-create the topic.
-    assert all(call == {"args": (), "kwargs": {"timeout": 7}} for call in admin.calls)
+    # A topic-scoped *Metadata* request could auto-create the topic, so
+    # list_topics is only ever called without a topic argument.
+    assert admin.calls == [{"args": (), "kwargs": {"timeout": 7}}]
+    assert admin.describe_calls == [
+        {"topics": ["orders"], "kwargs": {"request_timeout": 7}},
+        {"topics": ["missing"], "kwargs": {"request_timeout": 7}},
+    ]
 
 
 def test_topic_adapter_maps_partitions_and_internal_flag() -> None:
@@ -165,20 +227,77 @@ def test_topic_adapter_maps_partitions_and_internal_flag() -> None:
     assert topics["__consumer_offsets"].internal is True
 
 
-def test_describe_topic_with_unknown_topic_error_is_not_found() -> None:
+def test_describe_topic_maps_description() -> None:
     admin = FakeAdminClient(
-        _metadata([_topic("ghost", [], KafkaError(KafkaError.UNKNOWN_TOPIC_OR_PART))])
+        descriptions={
+            "__consumer_offsets": _description(
+                "__consumer_offsets",
+                [
+                    _partition_info(1, None, [1, 2], []),
+                    _partition_info(0, 2, [1, 2], [2, 1]),
+                ],
+                internal=True,
+            )
+        }
     )
-    with pytest.raises(KafkaResourceNotFoundError, match="ghost"):
-        KafkaTopicAdapter(_source(admin)).describe_topic("ghost")
+    topic = KafkaTopicAdapter(_source(admin)).describe_topic("__consumer_offsets")
+    assert topic.internal is True  # flag reported by Kafka, not the name prefix
+    assert [p.partition_id for p in topic.partitions] == [0, 1]
+    assert topic.partitions[0].leader == 2
+    assert topic.partitions[0].replicas == (1, 2)
+    assert topic.partitions[0].isr == (2, 1)
+    assert topic.partitions[1].leader is None
+    assert topic.partitions[1].isr == ()
+    assert topic.metadata_error is None
 
 
-def test_describe_topic_keeps_other_topic_errors_as_evidence() -> None:
+def test_describe_topic_treats_negative_leader_id_as_no_leader() -> None:
     admin = FakeAdminClient(
-        _metadata([_topic("t", [], KafkaError(KafkaError.TOPIC_AUTHORIZATION_FAILED))])
+        descriptions={"t": _description("t", [_partition_info(0, -1, [1], [])])}
     )
-    topic = KafkaTopicAdapter(_source(admin)).describe_topic("t")
-    assert topic.metadata_error == "TOPIC_AUTHORIZATION_FAILED"
+    assert (
+        KafkaTopicAdapter(_source(admin)).describe_topic("t").partitions[0].leader
+        is None
+    )
+
+
+def test_describe_missing_topic_is_not_found() -> None:
+    with pytest.raises(
+        KafkaResourceNotFoundError, match="Topic 'ghost' does not exist"
+    ):
+        KafkaTopicAdapter(_source(FakeAdminClient())).describe_topic("ghost")
+
+
+def test_describe_topic_other_errors_are_translated() -> None:
+    admin = FakeAdminClient(
+        descriptions={
+            "t": KafkaException(KafkaError(KafkaError.TOPIC_AUTHORIZATION_FAILED))
+        }
+    )
+    with pytest.raises(KafkaMetadataError, match="TOPIC_AUTHORIZATION_FAILED"):
+        KafkaTopicAdapter(_source(admin)).describe_topic("t")
+
+
+def test_describe_topic_future_that_never_completes_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gateway_module, "_FUTURE_GRACE_SECONDS", 0.05)
+    admin = FakeAdminClient(descriptions={"t": None})
+    with pytest.raises(KafkaOperationTimeoutError, match="topic description"):
+        KafkaTopicAdapter(_source(admin, timeout=0.05)).describe_topic("t")
+    assert admin.polls == 1
+
+
+def test_listing_skips_topics_reported_as_unknown() -> None:
+    admin = FakeAdminClient(
+        _metadata(
+            [
+                _topic("ghost", [], KafkaError(KafkaError.UNKNOWN_TOPIC_OR_PART)),
+                _topic("real", [_partition(0, 1, [1], [1])]),
+            ]
+        )
+    )
+    assert [t.name for t in KafkaTopicAdapter(_source(admin)).list_topics()] == ["real"]
 
 
 def test_kafka_exceptions_are_translated() -> None:

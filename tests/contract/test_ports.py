@@ -27,8 +27,8 @@ def test_adapter_signatures_match_port(
 
 
 def test_adapters_and_fakes_satisfy_ports_structurally() -> None:
-    cluster = KafkaClusterAdapter(metadata_source=None)  # type: ignore[arg-type]
-    topic = KafkaTopicAdapter(metadata_source=None)  # type: ignore[arg-type]
+    cluster = KafkaClusterAdapter(gateway=None)  # type: ignore[arg-type]
+    topic = KafkaTopicAdapter(gateway=None)  # type: ignore[arg-type]
     assert isinstance(cluster, ClusterReader)
     assert isinstance(topic, TopicReader)
     assert isinstance(FakeClusterReader(), ClusterReader)

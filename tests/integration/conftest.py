@@ -15,7 +15,7 @@ from confluent_kafka.admin import AdminClient
 from streamsage.infrastructure.config.settings import Settings
 from streamsage.infrastructure.kafka.admin_client import KafkaAdminClientFactory
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
-from streamsage.infrastructure.kafka.metadata import KafkaMetadataSource
+from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway
 
 BOOTSTRAP = os.environ.get("STREAMSAGE_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 READY_TIMEOUT_SECONDS = 90
@@ -42,10 +42,10 @@ def admin_client(
 
 
 @pytest.fixture
-def metadata_source(
+def gateway(
     admin_client: AdminClient, kafka_settings: Settings, error_events: KafkaErrorEvents
-) -> KafkaMetadataSource:
-    return KafkaMetadataSource(
+) -> KafkaAdminGateway:
+    return KafkaAdminGateway(
         admin_client,
         timeout_seconds=kafka_settings.kafka_request_timeout,
         error_events=error_events,

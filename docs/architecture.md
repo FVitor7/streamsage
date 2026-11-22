@@ -32,7 +32,7 @@ tools/call describe_topic
   → operation_boundary                (timing, logging, error mapping)
   → DescribeTopicUseCase.execute      (topic name rules, partition ordering)
   → KafkaTopicAdapter.describe_topic  (TopicReader port)
-  → KafkaMetadataSource.fetch         (AdminClient.list_topics(timeout=…))
+  → KafkaAdminGateway.request        (AdminClient.describe_topics, bounded wait)
   ← domain Topic → TopicDetailResponse (structured output)
 ```
 
@@ -44,22 +44,32 @@ to `mcp.server.mcpserver.MCPServer`. We use its decorators (`tool`,
 synchronous functions; the SDK runs them in a worker thread. As the spec
 requires, this keeps the synchronous Kafka client out of asyncio code.
 
-**One metadata call, all topics.** Both adapters use
+**Topic metadata without accidental creation.** Listings use
 `AdminClient.list_topics(timeout=…)` with no topic argument. That single
 response contains the cluster id, the controller id, the brokers and every
-topic's partitions, leaders, replicas and ISR. `describe_topic` finds the
-requested topic in this full listing. We checked against Kafka 4.3: a
-metadata request scoped to a missing topic name (`list_topics(topic=…)`)
-*did* auto-create that topic on a broker with
-`auto.create.topics.enable=true`. The local Docker broker keeps auto-creation
-enabled on purpose, and
-`test_missing_topic_raises_and_is_never_created` guards this behavior. The
-trade-off is that `describe_topic` fetches metadata for every topic. That is
-fine for M1 and can be revisited for very large clusters.
+topic's partitions, leaders, replicas and ISR. Against Kafka 4.3, a Metadata
+request scoped to a missing topic name (`list_topics(topic=…)`) *did*
+auto-create that topic on a broker with `auto.create.topics.enable=true`, so
+StreamSage never issues one.
 
-**Internal topics.** Cluster metadata does not carry an "internal" flag.
-Topics whose names start with `__`, Kafka's reserved prefix, are treated as
-internal (for example `__consumer_offsets` and `__transaction_state`).
+`describe_topic` uses the DescribeTopics admin API
+(`AdminClient.describe_topics`), which requests only the named topic. Its
+cost therefore no longer grows with the size of the cluster. It reports
+`UNKNOWN_TOPIC_OR_PART` for a missing topic and does not create it; this was
+verified against Kafka 4.3 with confluent-kafka 2.16, and
+`test_missing_topic_raises_and_is_never_created` guards it on every run. The
+local Docker broker keeps auto-creation enabled on purpose.
+
+**One gateway for every Kafka request.** Adapters never call the
+`AdminClient` directly; they go through `KafkaAdminGateway`. It applies the
+timeout and waits for future-based APIs with a bounded wait. It drains
+librdkafka's event queue after each request, and translates errors, mapping
+"does not exist" codes to `KafkaResourceNotFoundError`.
+
+**Internal topics.** Cluster metadata, which listings use, does not carry an
+"internal" flag. There, topics whose names start with `__` (Kafka's reserved
+prefix, for example `__consumer_offsets`) are treated as internal.
+`describe_topic` uses the `is_internal` flag returned by DescribeTopics.
 
 **Controller id in KRaft.** In KRaft mode, the Metadata response's
 `controller_id` is a live broker id, not the active quorum controller. The
