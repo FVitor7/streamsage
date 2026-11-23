@@ -29,9 +29,9 @@ the [sample environment](getting-started.md#what-the-sample-environment-contains
 | Ask | Tools | Sample answer |
 | --- | --- | --- |
 | "Which consumer groups exist and what state are they in?" | `list_consumer_groups` | `inventory-service` stable; `orders-service` and `payments-service` empty |
-| "Which consumer groups are furthest behind?" | `list_consumer_groups`, `get_consumer_lag` | `orders-service`: 180 messages; the others: 0 |
+| "Which consumer groups are furthest behind?" | `list_consumer_groups`, `get_consumer_lag` | `orders-service`: 180 offsets behind; the others: 0 |
 | "Show the lag of `orders-service` per partition." | `get_consumer_lag` | Partition 2: 66, partition 1: 60, partition 0: 54 |
-| "Which partitions are accumulating the most messages?" | `get_consumer_lag` | `orders.created` partition 2 (66 pending) |
+| "Which partitions are accumulating the most messages?" | `get_consumer_lag` | `orders.created` partition 2 (66 offsets behind) |
 | "Who is consuming `inventory.updated`?" | `list_consumer_groups`, `describe_consumer_group` | `inventory-service`, 1 member (`inventory-service-1`) assigned partition 0 |
 | "Only show groups that are stable." | `list_consumer_groups` (`states: ["stable"]`) | `inventory-service` |
 
@@ -39,7 +39,7 @@ the [sample environment](getting-started.md#what-the-sample-environment-contains
 
 | Ask | Tools | Sample answer |
 | --- | --- | --- |
-| "Is `orders-service` healthy?" | `analyze_consumer_health` | `warning`: `NO_ACTIVE_MEMBERS` (no members while 180 messages are pending) |
+| "Is `orders-service` healthy?" | `analyze_consumer_health` | `warning`: `NO_ACTIVE_MEMBERS` (no members while 180 offsets behind) |
 | "Is `orders-service` stuck, or just slow?" | `detect_stalled_partitions` | All 3 partitions `not_advancing` over the sampling window |
 | "Check `inventory-service` for problems." | `analyze_consumer_health`, `detect_stalled_partitions` | `healthy`: one member, no lag |
 | "Check the health of every consumer group." | `list_consumer_groups`, then `analyze_consumer_health` per group | One `warning` (`orders-service`), two `healthy` |
@@ -105,7 +105,7 @@ What each step contributes:
 
 | Step | Evidence gained | Why it matters |
 | --- | --- | --- |
-| `get_consumer_lag` | 180 messages pending, split per partition | Lag is a single snapshot: it shows *how far* behind, not *why* |
+| `get_consumer_lag` | 180 offsets behind, split per partition | Lag is a single snapshot: it shows *how far* behind, not *why* |
 | `analyze_consumer_health` | State `empty`, 0 members | Explains the lag: nobody is consuming |
 | `detect_stalled_partitions` | Committed offsets did not move over the window | Confirms no progress, while flagging that infrequent commits could look the same |
 

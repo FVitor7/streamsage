@@ -13,14 +13,14 @@ from confluent_kafka import (
     Node,
     TopicPartition,
 )
-from confluent_kafka.admin._group import (
+from confluent_kafka.admin import (
     ConsumerGroupDescription,
     ConsumerGroupListing,
     ListConsumerGroupsResult,
+    ListOffsetsResultInfo,
     MemberAssignment,
     MemberDescription,
 )
-from confluent_kafka.admin._listoffsets import ListOffsetsResultInfo
 
 from streamsage.domain.entities.consumer_group import ConsumerGroupState as State
 from streamsage.domain.entities.consumer_group import TopicPartitionRef

@@ -259,8 +259,10 @@ class PartitionLagResponse(BaseModel):
     )
     lag: int | None = Field(
         description=(
-            "log_end_offset - committed_offset, or null when either is unknown. "
-            "Unknown lag is never reported as 0."
+            "Offset lag: log_end_offset - committed_offset, or null when either "
+            "is unknown. Unknown lag is never reported as 0. An upper bound on "
+            "unconsumed messages, not an exact count: compaction and "
+            "transaction markers can make the real number smaller."
         )
     )
 
@@ -278,7 +280,10 @@ class PartitionLagResponse(BaseModel):
 class ConsumerLagResponse(BaseModel):
     group_id: str
     total_lag: int | None = Field(
-        description="Sum of known partition lags; null if no lag is known."
+        description=(
+            "Sum of known partition offset lags (offsets behind, an upper bound "
+            "on unconsumed messages); null if no lag is known."
+        )
     )
     max_lag: int | None
     partition_count: int

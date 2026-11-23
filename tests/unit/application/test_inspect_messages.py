@@ -4,7 +4,7 @@ from streamsage.application.use_cases.inspect_messages import InspectMessagesUse
 from streamsage.domain.entities.message import OffsetRange, PartitionOffsets
 from streamsage.domain.exceptions import InvalidInputError, KafkaResourceNotFoundError
 from streamsage.domain.messages.sanitizer import PayloadTreatment, SanitizationPolicy
-from tests.fakes import FakeMessageReader, raw_message
+from tests.fakes import FakeMessageReader, raw_message, untimed_message
 
 
 def _use_case(
@@ -123,3 +123,30 @@ def test_reading_from_an_offset_is_exact() -> None:
     )
     assert result.exact is True
     assert result.messages_read == 3
+
+
+def test_messages_without_timestamps_make_cross_partition_order_inexact() -> None:
+    offsets = [PartitionOffsets(0, 0, 2), PartitionOffsets(1, 0, 2)]
+    messages = [
+        raw_message(0, 0),
+        untimed_message(0, 1),
+        raw_message(1, 0),
+        raw_message(1, 1),
+    ]
+    reader = FakeMessageReader(offsets=offsets, messages=messages)
+    result = _use_case(reader).execute("orders", limit=4)
+    assert result.exact is False
+    assert any("1 message(s) read have no timestamp" in n for n in result.notes)
+    # Offset order is preserved within partition 0.
+    partition_0 = [m.offset for m in result.messages if m.partition == 0]
+    assert partition_0 == [1, 0]
+
+
+def test_messages_without_timestamps_in_one_partition_stay_exact() -> None:
+    offsets = [PartitionOffsets(0, 0, 3)]
+    messages = [untimed_message(0, o) for o in range(3)]
+    reader = FakeMessageReader(offsets=offsets, messages=messages)
+    result = _use_case(reader).execute("orders", limit=2)
+    assert result.exact is True
+    assert [m.offset for m in result.messages] == [2, 1]
+    assert result.notes == ()

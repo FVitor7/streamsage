@@ -12,6 +12,7 @@ from streamsage.domain.messages.sanitizer import (
     SanitizationPolicy,
     sanitize_message,
 )
+from streamsage.domain.messages.selection import uncertain_order_note
 from streamsage.domain.value_objects.topic_name import validate_topic_name
 
 
@@ -78,6 +79,10 @@ class InspectMessagesUseCase:
             ordered = list(result.messages)
             exact = latest.exact and not unavailable
             notes.extend(latest.notes)
+            if result.without_timestamp and len(latest.ranges) > 1:
+                # "Newest" across partitions needs timestamps.
+                exact = False
+                notes.append(uncertain_order_note(result.without_timestamp))
         if not result.complete:
             notes.append(
                 "The read stopped before all requested messages were received "

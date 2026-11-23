@@ -11,13 +11,13 @@ from confluent_kafka import (
     TopicCollection,
     TopicPartitionInfo,
 )
-from confluent_kafka.admin._metadata import (
+from confluent_kafka.admin import (
     BrokerMetadata,
     ClusterMetadata,
     PartitionMetadata,
+    TopicDescription,
     TopicMetadata,
 )
-from confluent_kafka.admin._topic import TopicDescription
 
 from streamsage.domain.entities.cluster import Broker
 from streamsage.domain.exceptions import (

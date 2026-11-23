@@ -225,6 +225,14 @@ A group id Kafka does not know is reported as
 Lag = log end offset − committed offset, for every partition the group has
 committed **or** is assigned. Largest lag first.
 
+This is **offset lag**: how many offsets the group is behind, which is an
+upper bound on the messages it has not consumed. On compacted topics, removed
+messages keep their offsets, and transaction markers take offsets without
+being messages, so fewer messages may actually be pending. For example, with
+offsets 100, 102 and 104 left after compaction and a committed offset of
+100, the lag is 5 while 3 messages remain. StreamSage does not try to count
+the real messages, which would mean reading them.
+
 | Parameter | Type | Default | Constraints |
 | --- | --- | --- | --- |
 | `group_id` | string | – | Required |
@@ -299,7 +307,7 @@ state, members and current lag.
     {
       "code": "NO_ACTIVE_MEMBERS",
       "severity": "warning",
-      "summary": "The group has no active members while 180 message(s) are pending, so nothing in this group is consuming them.",
+      "summary": "The group has no active members while its committed offsets are 180 behind the end of the log, so nothing in this group is consuming.",
       "evidence": [
         {
           "label": "state",
@@ -325,7 +333,8 @@ state, members and current lag.
   ],
   "limitations": [
     "Based on a single snapshot: it shows how far behind the group is, not whether its offsets are advancing. A large lag can belong to a healthy consumer catching up. Use detect_stalled_partitions to compare offsets over time.",
-    "Lag thresholds are configured values (warning >= 1000, critical >= 10000 messages per partition), not derived from this consumer's throughput."
+    "Lag thresholds are configured values (warning >= 1000, critical >= 10000 offsets per partition), not derived from this consumer's throughput.",
+    "Lag is offset lag (offsets behind), an upper bound on unconsumed messages: on compacted or transactional topics fewer messages may actually be pending."
   ]
 }
 ```
@@ -336,10 +345,10 @@ Findings it can produce:
 | --- | --- | --- |
 | `LAG_ABOVE_CRITICAL` | critical | A partition's lag ≥ `STREAMSAGE_LAG_CRITICAL_THRESHOLD` (default 10,000) |
 | `LAG_ABOVE_WARNING` | warning | A partition's lag ≥ `STREAMSAGE_LAG_WARNING_THRESHOLD` (default 1,000) |
-| `NO_ACTIVE_MEMBERS` | warning | No members while messages are pending |
+| `NO_ACTIVE_MEMBERS` | warning | No members while there is offset lag |
 | `REBALANCING` | warning | Group is preparing or completing a rebalance |
 | `UNASSIGNED_PARTITIONS_WITH_LAG` | warning | Members exist, but partitions with lag are assigned to none |
-| `INACTIVE_CAUGHT_UP` | info | No members, nothing pending |
+| `INACTIVE_CAUGHT_UP` | info | No members, no offset lag |
 | `LAG_UNKNOWN` | info | Some partitions have unknown lag |
 | `NO_PARTITIONS` | info | No committed offsets and no assignments |
 | `STATE_UNKNOWN` | info | Coordinator reported no known state |
@@ -406,7 +415,7 @@ flowchart TD
     {
       "code": "PARTITIONS_NOT_ADVANCING",
       "severity": "warning",
-      "summary": "3 partition(s) had pending messages and their committed offset did not change during the 5s sampling window; 0 of them received new messages meanwhile.",
+      "summary": "3 partition(s) had offset lag and their committed offset did not change during the 5s sampling window; 0 of them received new messages meanwhile.",
       "evidence": [
         {
           "label": "member_count",
@@ -476,6 +485,20 @@ caller already knows the key being searched for.
 
 Without `start_offset`: the newest messages, newest first. With `partition`
 and `start_offset`: up to `limit` messages from that offset, in offset order.
+
+How "newest" is ordered (also for `find_messages_by_key` matches):
+
+| Rule | Why |
+| --- | --- |
+| Within a partition, a higher offset is always newer | Offsets are the partition's real order; `CreateTime` timestamps are set by producers and can go backwards |
+| Across partitions, messages are ranked by timestamp | It is the only signal partitions share |
+| A message without a timestamp is ranked as if it had the nearest earlier timestamp in its partition | Unknown is not "1970": the message was written after that earlier one |
+| A message with no earlier timestamp in its partition ranks last, in offset order | It cannot be placed in time |
+
+When messages without timestamps are read from more than one partition, the
+result has `exact: false` and a note saying the order across partitions is
+an estimate. Topics written with message format v2 (Kafka 0.11+) always have
+timestamps.
 
 `limit` bounds the **output**. A separate read budget,
 `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` (10,000 by default), bounds how many

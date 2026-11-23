@@ -16,8 +16,7 @@ from confluent_kafka import (
     TopicPartition,
     TopicPartitionInfo,
 )
-from confluent_kafka.admin._listoffsets import ListOffsetsResultInfo
-from confluent_kafka.admin._topic import TopicDescription
+from confluent_kafka.admin import ListOffsetsResultInfo, TopicDescription
 
 from streamsage.domain.entities.message import (
     OffsetRange,

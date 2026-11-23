@@ -220,7 +220,7 @@ async def test_analyze_consumer_health(client: Client) -> None:
     assert finding["code"] == "LAG_ABOVE_WARNING"
     assert finding["severity"] == "warning"
     assert finding["summary"] == (
-        "1 partition(s) have lag at or above the warning threshold of 50 messages."
+        "1 partition(s) have lag at or above the warning threshold of 50 offsets."
     )
     assert finding["evidence"] == [
         {"label": "max_lag", "value": 60},

@@ -169,7 +169,7 @@ Inspector or HTTP mode, see [clients.md](clients.md).
 | Try asking | You should see |
 | --- | --- |
 | "What topics are in this Kafka cluster?" | The 5 sample topics and their partition counts |
-| "Which consumer groups have the highest lag?" | `orders-service` with 180 messages |
+| "Which consumer groups have the highest lag?" | `orders-service`, 180 offsets behind |
 | "Is orders-service healthy? Is it stuck?" | `warning`, no active members, partitions not advancing |
 | "Are there messages in a DLQ? Why did they fail?" | 2 messages, with `error.message` such as `order total is negative` |
 | "Show me the latest messages in customers.updated." | Payloads with `email`, `password` and `phone` as `[REDACTED]` |

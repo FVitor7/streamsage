@@ -8,15 +8,16 @@ from confluent_kafka import (
     Node,
     TopicPartition,
 )
-from confluent_kafka.admin._group import (
+from confluent_kafka.admin import (
     ConsumerGroupDescription,
     ListConsumerGroupsResult,
+    ListOffsetsResultInfo,
     MemberDescription,
+    OffsetSpec,
 )
-from confluent_kafka.admin._group import (
+from confluent_kafka.admin import (
     ConsumerGroupListing as KafkaGroupListing,
 )
-from confluent_kafka.admin._listoffsets import ListOffsetsResultInfo, OffsetSpec
 
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,

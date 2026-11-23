@@ -1,6 +1,7 @@
 import pytest
 
 from streamsage.domain.diagnostics.consumer_health import (
+    OFFSET_LAG_LIMITATION,
     SNAPSHOT_LIMITATION,
     ConsumerHealthReport,
     LagThresholds,
@@ -66,6 +67,7 @@ def test_active_group_with_low_lag_is_healthy() -> None:
     assert report.findings == ()
     assert report.limitations[0] == SNAPSHOT_LIMITATION
     assert "warning >= 100" in report.limitations[1]
+    assert report.limitations[2] == OFFSET_LAG_LIMITATION
 
 
 @pytest.mark.parametrize(

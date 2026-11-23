@@ -12,6 +12,10 @@ from streamsage.domain.messages.sanitizer import (
     SanitizationPolicy,
     sanitize_message,
 )
+from streamsage.domain.messages.selection import (
+    order_newest_first,
+    uncertain_order_note,
+)
 from streamsage.domain.value_objects.topic_name import validate_topic_name
 
 MAX_SEARCH_KEY_BYTES = 1024
@@ -85,11 +89,12 @@ class FindMessagesByKeyUseCase:
             partition,
         )
         scan = self._reader.find_by_key(name, plan.ranges, key_bytes, limit)
-        newest = sorted(
-            scan.matches, key=lambda m: (m.timestamp_ms or 0, m.offset), reverse=True
-        )[:limit]
+        newest = order_newest_first(list(scan.matches))[:limit]
 
         notes = list(unavailable_notes)
+        untimed = sum(1 for m in scan.matches if m.timestamp_ms is None)
+        if untimed and len({m.partition for m in scan.matches}) > 1:
+            notes.append(uncertain_order_note(untimed))
         partial = [c.partition for c in plan.coverage if not c.reaches_start]
         if partial:
             notes.append(

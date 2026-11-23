@@ -1,4 +1,4 @@
-from confluent_kafka.admin._metadata import ClusterMetadata
+from confluent_kafka.admin import ClusterMetadata
 
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.infrastructure.kafka.gateway import KafkaAdminGateway

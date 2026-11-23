@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     http_metrics_public: bool = False
     include_internal_topics: bool = False
 
-    # Per-partition lag, in messages, used by analyze_consumer_health.
+    # Per-partition offset lag (offsets behind, an upper bound on unconsumed
+    # messages) used by analyze_consumer_health.
     # Starting points only: tune them to each consumer's normal throughput.
     lag_warning_threshold: int = Field(default=1_000, ge=1)
     lag_critical_threshold: int = Field(default=10_000, ge=1)

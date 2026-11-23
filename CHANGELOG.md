@@ -12,7 +12,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   responses, for topics whose keys carry personal data. Messages gain a
   `key_withheld` field.
 
+### Changed
+- Lag is now described as **offset lag** everywhere: tool descriptions,
+  findings, health limitations and docs say "offsets behind" instead of
+  "pending messages". On compacted or transactional topics, offset lag is
+  an upper bound on unconsumed messages. `STREAMSAGE_LAG_*_THRESHOLD` are
+  documented in offsets. No fields were renamed and values are unchanged.
+- `confluent_kafka.admin` types are imported from their public module
+  instead of private submodules (`_group`, `_metadata`, …), so library
+  upgrades that reorganize internals do not break StreamSage.
+
 ### Fixed
+- Messages without a timestamp were ranked as if they were from 1970, and
+  messages of one partition could be reordered by producer timestamps that
+  go backwards. Within a partition, the offset now always decides the
+  order. A message without a timestamp is ranked as if it had the nearest
+  earlier timestamp in its partition. When such messages are read from more
+  than one partition, `inspect_messages` returns `exact: false`, and both
+  message tools add a note that the order across partitions is an
+  estimate.
 - `list_consumer_groups` returned a partial list without saying so when some
   brokers failed to answer. Responses now include `complete`,
   `failed_broker_count`, `failure_codes` and a note that a missing group may

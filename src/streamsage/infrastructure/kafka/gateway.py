@@ -16,8 +16,7 @@ from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol, TypeVar
 
 from confluent_kafka import KafkaError, KafkaException
-from confluent_kafka.admin import AdminClient
-from confluent_kafka.admin._metadata import ClusterMetadata
+from confluent_kafka.admin import AdminClient, ClusterMetadata
 
 from streamsage.domain.exceptions import (
     KafkaConnectionError,

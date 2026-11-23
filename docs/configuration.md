@@ -67,12 +67,13 @@ of `kafka:metadata` and `kafka:messages`. See
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition lag (messages) for `LAG_ABOVE_WARNING` |
-| `STREAMSAGE_LAG_CRITICAL_THRESHOLD` | `10000` | Per-partition lag for `LAG_ABOVE_CRITICAL`; must be ≥ warning |
+| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition offset lag (offsets behind) for `LAG_ABOVE_WARNING` |
+| `STREAMSAGE_LAG_CRITICAL_THRESHOLD` | `10000` | Per-partition offset lag for `LAG_ABOVE_CRITICAL`; must be ≥ warning |
 | `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` | `{}` | JSON map of finding code → `info`, `warning` or `critical` |
 
 The thresholds are starting points: tune them to each consumer's normal
-throughput. Overrides change how findings count toward the status, for
+throughput. They compare **offset lag**, which on compacted or transactional
+topics can be higher than the number of messages actually pending. Overrides change how findings count toward the status, for
 example:
 
 ```bash

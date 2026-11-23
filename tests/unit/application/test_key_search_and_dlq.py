@@ -13,7 +13,13 @@ from streamsage.domain.entities.message import OffsetRange, PartitionOffsets
 from streamsage.domain.exceptions import InvalidInputError, KafkaResourceNotFoundError
 from streamsage.domain.messages.dlq import DlqTopicMatcher
 from streamsage.domain.messages.sanitizer import PayloadTreatment, SanitizationPolicy
-from tests.fakes import FakeMessageReader, FakeTopicReader, make_topic, raw_message
+from tests.fakes import (
+    FakeMessageReader,
+    FakeTopicReader,
+    make_topic,
+    raw_message,
+    untimed_message,
+)
 
 
 def _messages() -> list:
@@ -75,6 +81,20 @@ def test_scan_budget_smaller_than_partition_count_is_a_hard_limit() -> None:
     assert [c.partition for c in result.coverage] == [0]
     assert result.searched_whole_topic is False
     assert any("1 partition(s) were not searched at all" in n for n in result.notes)
+
+
+def test_matches_without_timestamps_are_not_treated_as_oldest() -> None:
+    offsets = [PartitionOffsets(0, 0, 2), PartitionOffsets(1, 0, 1)]
+    newer = untimed_message(0, 1)
+    object.__setattr__(newer, "key", b"k-0")
+    reader = FakeMessageReader(
+        offsets=offsets, messages=[raw_message(0, 0), newer, raw_message(1, 0)]
+    )
+    result = _use_case(reader).execute("orders", "k-0", limit=5)
+    # Partition 0's offset 1 inherits offset 0's timestamp, so it ranks first
+    # there, instead of last as a 1970 timestamp would.
+    assert [(m.partition, m.offset) for m in result.matches][0] == (0, 1)
+    assert any("have no timestamp" in n for n in result.notes)
 
 
 def test_incomplete_scan_is_flagged() -> None:

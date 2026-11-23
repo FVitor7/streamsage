@@ -75,6 +75,13 @@ strict = true
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
 
+# confluent_kafka.admin re-exports its result types (ClusterMetadata,
+# TopicDescription, OffsetSpec, ...) without __all__, so strict mode would
+# reject the public import paths and push us to private modules instead.
+[[tool.mypy.overrides]]
+module = ["confluent_kafka.admin", "confluent_kafka.admin.*"]
+implicit_reexport = true
+
 [tool.coverage.run]
 branch = true
 source = ["streamsage"]

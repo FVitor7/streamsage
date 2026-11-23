@@ -96,6 +96,9 @@ class MessageReadResult:
     messages: tuple[RawMessage, ...]
     complete: bool
     messages_read: int = 0
+    # Messages read (kept or not) that had no timestamp; when non-zero, the
+    # order across partitions is an estimate.
+    without_timestamp: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,8 +13,11 @@ from confluent_kafka import (
     TopicCollection,
     TopicPartition,
 )
-from confluent_kafka.admin._listoffsets import ListOffsetsResultInfo, OffsetSpec
-from confluent_kafka.admin._topic import TopicDescription
+from confluent_kafka.admin import (
+    ListOffsetsResultInfo,
+    OffsetSpec,
+    TopicDescription,
+)
 
 from streamsage.domain.entities.message import (
     KeyScanResult,
@@ -153,6 +156,7 @@ class KafkaMessageAdapter:
                     "partitions": len(wanted),
                     "messages_read": newest.offered,
                     "kept": len(newest),
+                    "without_timestamp": newest.without_timestamp,
                     "complete": complete,
                 }
             },
@@ -161,6 +165,7 @@ class KafkaMessageAdapter:
             messages=newest.newest_first(),
             complete=complete,
             messages_read=newest.offered,
+            without_timestamp=newest.without_timestamp,
         )
 
     def _read_ranges(

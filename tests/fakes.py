@@ -2,6 +2,7 @@
 
 import secrets
 from collections.abc import Sequence
+from dataclasses import replace
 
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.consumer_group import (
@@ -197,6 +198,15 @@ def raw_message(
     )
 
 
+def untimed_message(partition: int, offset: int) -> RawMessage:
+    """A message without a timestamp (old message format)."""
+    return replace(
+        raw_message(partition, offset),
+        timestamp_ms=None,
+        timestamp_type=TimestampType.NOT_AVAILABLE,
+    )
+
+
 class FakeMessageReader:
     """Serves messages from an in-memory log, honoring the requested ranges."""
 
@@ -250,6 +260,7 @@ class FakeMessageReader:
             messages=newest.newest_first(),
             complete=self.complete,
             messages_read=newest.offered,
+            without_timestamp=newest.without_timestamp,
         )
 
     def read_range(

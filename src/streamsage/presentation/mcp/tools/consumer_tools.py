@@ -98,10 +98,13 @@ def register_consumer_tools(
         name="get_consumer_lag",
         title="Get consumer group lag",
         description=(
-            "Per-partition lag of a consumer group (log end offset minus committed "
-            "offset), largest first, with total and maximum lag. Partitions with "
-            "no committed offset have unknown (null) lag, never 0. Lag is a single "
-            "snapshot: high lag alone does not prove a consumer is stuck."
+            "Per-partition offset lag of a consumer group (log end offset minus "
+            "committed offset), largest first, with total and maximum lag. Lag "
+            "counts offsets, so it is an upper bound on unconsumed messages: on "
+            "compacted or transactional topics the real number can be smaller. "
+            "Partitions with no committed offset have unknown (null) lag, never "
+            "0. Lag is a single snapshot: high lag alone does not prove a "
+            "consumer is stuck."
         ),
         annotations=READ_ONLY,
     )
@@ -148,7 +151,7 @@ def register_consumer_tools(
             "Detect partitions whose committed offsets are not advancing. Samples "
             "the group's offsets twice, interval_seconds apart, within this call, "
             "and classifies each partition as advancing, caught_up, not_advancing "
-            "(pending messages but no commits), moved_backward or unknown. The "
+            "(offset lag but no commits), moved_backward or unknown. The "
             "call takes at least interval_seconds. A consumer that commits less "
             "often than the interval can look stalled."
         ),

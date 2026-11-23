@@ -56,6 +56,11 @@ SNAPSHOT_LIMITATION = (
     "consumer catching up. Use detect_stalled_partitions to compare offsets "
     "over time."
 )
+OFFSET_LAG_LIMITATION = (
+    "Lag is offset lag (offsets behind), an upper bound on unconsumed "
+    "messages: on compacted or transactional topics fewer messages may "
+    "actually be pending."
+)
 
 _CHECK_PROGRESS = (
     "Run detect_stalled_partitions to check whether committed offsets are advancing."
@@ -64,7 +69,7 @@ _CHECK_PROGRESS = (
 
 @dataclass(frozen=True, slots=True)
 class LagThresholds:
-    """Per-partition lag thresholds, in messages."""
+    """Per-partition offset lag thresholds, in offsets behind."""
 
     warning: int
     critical: int
@@ -113,8 +118,9 @@ def assess_consumer_health(
         limitations=(
             SNAPSHOT_LIMITATION,
             f"Lag thresholds are configured values (warning >= "
-            f"{thresholds.warning}, critical >= {thresholds.critical} messages "
+            f"{thresholds.warning}, critical >= {thresholds.critical} offsets "
             "per partition), not derived from this consumer's throughput.",
+            OFFSET_LAG_LIMITATION,
         ),
     )
 
@@ -148,7 +154,7 @@ def _lag_threshold_findings(
             severity=severity,
             summary=(
                 f"{len(offending)} partition(s) have lag at or above the {level} "
-                f"threshold of {limit} messages."
+                f"threshold of {limit} offsets."
             ),
             evidence=(Evidence("max_lag", lag.max_lag), *partition_evidence(offending)),
             hypotheses=(
@@ -173,8 +179,9 @@ def _membership_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Fi
                 code=NO_ACTIVE_MEMBERS,
                 severity=Severity.WARNING,
                 summary=(
-                    f"The group has no active members while {total} message(s) "
-                    "are pending, so nothing in this group is consuming them."
+                    f"The group has no active members while its committed offsets "
+                    f"are {total} behind the end of the log, so nothing in this "
+                    "group is consuming."
                 ),
                 evidence=(
                     Evidence("state", group.state.value),
@@ -197,7 +204,7 @@ def _membership_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Fi
             Finding(
                 code=INACTIVE_CAUGHT_UP,
                 severity=Severity.INFO,
-                summary="The group has no active members and no pending messages.",
+                summary="The group has no active members and no offset lag.",
                 evidence=(
                     Evidence("state", group.state.value),
                     Evidence("total_lag", 0),
@@ -250,7 +257,7 @@ def _unassigned_findings(group: ConsumerGroup, lag: ConsumerGroupLag) -> list[Fi
             code=UNASSIGNED_PARTITIONS_WITH_LAG,
             severity=Severity.WARNING,
             summary=(
-                f"{len(unassigned)} partition(s) with pending messages are not "
+                f"{len(unassigned)} partition(s) with offset lag are not "
                 "assigned to any member."
             ),
             evidence=partition_evidence(unassigned),
