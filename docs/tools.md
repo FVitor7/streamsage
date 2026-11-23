@@ -151,6 +151,10 @@ broker allows auto-creation.
 ```json
 {
   "group_count": 3,
+  "complete": true,
+  "failed_broker_count": 0,
+  "failure_codes": [],
+  "notes": [],
   "groups": [
     {
       "group_id": "inventory-service",
@@ -173,6 +177,13 @@ broker allows auto-creation.
 
 `is_simple` is `true` for groups that only hold committed offsets and never
 ran the group protocol (for example, offsets set by tooling).
+
+Kafka lists groups by asking every broker. If some brokers fail to answer,
+the groups that were returned are still listed, but the result has
+`complete: false`, the number of brokers that failed, their Kafka error
+codes, and a note: a group missing from an incomplete listing may still
+exist. Check a specific group with `describe_consumer_group`. If no broker
+answers, the call fails.
 
 ### `describe_consumer_group`
 
@@ -213,6 +224,14 @@ A group id Kafka does not know is reported as
 
 Lag = log end offset − committed offset, for every partition the group has
 committed **or** is assigned. Largest lag first.
+
+This is **offset lag**: how many offsets the group is behind, which is an
+upper bound on the messages it has not consumed. On compacted topics, removed
+messages keep their offsets, and transaction markers take offsets without
+being messages, so fewer messages may actually be pending. For example, with
+offsets 100, 102 and 104 left after compaction and a committed offset of
+100, the lag is 5 while 3 messages remain. StreamSage does not try to count
+the real messages, which would mean reading them.
 
 | Parameter | Type | Default | Constraints |
 | --- | --- | --- | --- |
@@ -288,7 +307,7 @@ state, members and current lag.
     {
       "code": "NO_ACTIVE_MEMBERS",
       "severity": "warning",
-      "summary": "The group has no active members while 180 message(s) are pending, so nothing in this group is consuming them.",
+      "summary": "The group has no active members while its committed offsets are 180 behind the end of the log, so nothing in this group is consuming.",
       "evidence": [
         {
           "label": "state",
@@ -314,7 +333,8 @@ state, members and current lag.
   ],
   "limitations": [
     "Based on a single snapshot: it shows how far behind the group is, not whether its offsets are advancing. A large lag can belong to a healthy consumer catching up. Use detect_stalled_partitions to compare offsets over time.",
-    "Lag thresholds are configured values (warning >= 1000, critical >= 10000 messages per partition), not derived from this consumer's throughput."
+    "Lag thresholds are configured values (warning >= 1000, critical >= 10000 offsets per partition), not derived from this consumer's throughput.",
+    "Lag is offset lag (offsets behind), an upper bound on unconsumed messages: on compacted or transactional topics fewer messages may actually be pending."
   ]
 }
 ```
@@ -325,10 +345,10 @@ Findings it can produce:
 | --- | --- | --- |
 | `LAG_ABOVE_CRITICAL` | critical | A partition's lag ≥ `STREAMSAGE_LAG_CRITICAL_THRESHOLD` (default 10,000) |
 | `LAG_ABOVE_WARNING` | warning | A partition's lag ≥ `STREAMSAGE_LAG_WARNING_THRESHOLD` (default 1,000) |
-| `NO_ACTIVE_MEMBERS` | warning | No members while messages are pending |
+| `NO_ACTIVE_MEMBERS` | warning | No members while there is offset lag |
 | `REBALANCING` | warning | Group is preparing or completing a rebalance |
 | `UNASSIGNED_PARTITIONS_WITH_LAG` | warning | Members exist, but partitions with lag are assigned to none |
-| `INACTIVE_CAUGHT_UP` | info | No members, nothing pending |
+| `INACTIVE_CAUGHT_UP` | info | No members, no offset lag |
 | `LAG_UNKNOWN` | info | Some partitions have unknown lag |
 | `NO_PARTITIONS` | info | No committed offsets and no assignments |
 | `STATE_UNKNOWN` | info | Coordinator reported no known state |
@@ -395,7 +415,7 @@ flowchart TD
     {
       "code": "PARTITIONS_NOT_ADVANCING",
       "severity": "warning",
-      "summary": "3 partition(s) had pending messages and their committed offset did not change during the 5s sampling window; 0 of them received new messages meanwhile.",
+      "summary": "3 partition(s) had offset lag and their committed offset did not change during the 5s sampling window; 0 of them received new messages meanwhile.",
       "evidence": [
         {
           "label": "member_count",
@@ -453,12 +473,48 @@ the [data protection rules](security.md#data-protection).
 | `json_redacted` | JSON with sensitive fields replaced by `[REDACTED]`, then truncated |
 | `text_truncated` | Not JSON: truncated only (field-name redaction cannot apply) |
 | `binary` | Not UTF-8 (Avro, Protobuf, …): not decoded |
+| `too_large` | Above `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` (256 KiB by default): neither kept in memory nor decoded; only the size is shown |
 | `null` | No payload (for example a tombstone) |
+
+Keys are returned by default. With `STREAMSAGE_MESSAGE_KEYS_ENABLED=false`,
+every message has `key: null` and `key_withheld: true`; the key's size and
+encoding are still reported. `find_messages_by_key` keeps working, since the
+caller already knows the key being searched for.
 
 ### `inspect_messages`
 
 Without `start_offset`: the newest messages, newest first. With `partition`
 and `start_offset`: up to `limit` messages from that offset, in offset order.
+
+How "newest" is ordered (also for `find_messages_by_key` matches):
+
+| Rule | Why |
+| --- | --- |
+| Within a partition, a higher offset is always newer | Offsets are the partition's real order; `CreateTime` timestamps are set by producers and can go backwards |
+| Across partitions, messages are ranked by timestamp | It is the only signal partitions share |
+| A message without a timestamp is ranked as if it had the nearest earlier timestamp in its partition | Unknown is not "1970": the message was written after that earlier one |
+| A message with no earlier timestamp in its partition ranks last, in offset order | It cannot be placed in time |
+
+When messages without timestamps are read from more than one partition, the
+result has `exact: false` and a note saying the order across partitions is
+an estimate. Topics written with message format v2 (Kafka 0.11+) always have
+timestamps.
+
+`limit` bounds the **output**. A separate read budget,
+`STREAMSAGE_MESSAGE_INSPECT_MAX_READ` (10,000 by default), bounds how many
+messages may be **read**. The globally newest `limit` messages can sit in any
+partition, so an exact answer needs the newest `limit` messages of every
+partition:
+
+| Situation | Reads | `exact` |
+| --- | --- | --- |
+| `partitions × limit ≤ budget` | The newest `limit` of each partition | `true`: guaranteed newest |
+| Over budget | Fewer per partition (budget ÷ partitions) | `false`: newest *among those read*, explained in `notes` |
+| More partitions than the budget | One message from the first partitions | `false`, with the uncovered partitions in `notes` |
+| Some partition offsets unavailable | The available partitions | `false`, with the unavailable partitions in `notes` |
+
+Only the `limit` newest messages are held in memory while reading, however
+many are read (`messages_read`).
 
 | Parameter | Type | Default | Constraints |
 | --- | --- | --- | --- |
@@ -476,6 +532,8 @@ Reading `customers.updated` (fake personal data) from offset 0:
   "max_payload_bytes": 1024,
   "message_count": 1,
   "complete": true,
+  "exact": true,
+  "messages_read": 1,
   "notes": [],
   "messages": [
     {
@@ -487,6 +545,7 @@ Reading `customers.updated` (fake personal data) from offset 0:
       "key_size": 6,
       "key_encoding": "text",
       "key_truncated": false,
+      "key_withheld": false,
       "headers": [
         {
           "key": "Authorization",
@@ -585,6 +644,8 @@ partition within budgets, and reports exactly what it covered.
     },
     …
   ],
+  "uncovered_partitions": [],
+  "unavailable_partitions": [],
   "notes": [],
   "matches": [
     {
@@ -596,6 +657,7 @@ partition within budgets, and reports exactly what it covered.
       "key_size": 7,
       "key_encoding": "text",
       "key_truncated": false,
+      "key_withheld": false,
       "headers": [],
       "payload_size": 11,
       "payload_treatment": "json_redacted",
@@ -610,9 +672,16 @@ partition within budgets, and reports exactly what it covered.
 | Field | Meaning |
 | --- | --- |
 | `scanned` | Messages read, matching or not |
-| `per_partition_limit` | Budget per partition: `min(STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION, MAX_TOTAL ÷ partitions)` |
+| `per_partition_limit` | Budget per partition: `min(STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION, MAX_TOTAL ÷ non-empty partitions)`, at least 1 |
 | `coverage[].reaches_start` | The scan reached the oldest message still in the partition |
+| `uncovered_partitions` | Partitions not searched at all, because the topic has more non-empty partitions than `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL`. The first partitions by id are searched, one message each |
+| `unavailable_partitions` | Partitions whose offsets could not be read |
 | `searched_whole_topic` | Every partition fully covered; only then does "no match" mean the key is absent |
+
+`STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` is a hard limit: a call never
+plans to read more messages than that. Empty partitions do not use any of
+the budget. To cover uncovered partitions, search them one at a time with
+`partition`.
 
 ### `list_dlq_topics`
 

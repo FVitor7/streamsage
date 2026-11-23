@@ -204,7 +204,7 @@ def _not_advancing_findings(
             code=PARTITIONS_NOT_ADVANCING,
             severity=Severity.WARNING,
             summary=(
-                f"{len(stalled)} partition(s) had pending messages and their "
+                f"{len(stalled)} partition(s) had offset lag and their "
                 f"committed offset did not change during the {interval:g}s "
                 f"sampling window; {len(growing)} of them received new messages "
                 "meanwhile."

@@ -1,17 +1,27 @@
 import logging
 from enum import Enum
 
-from confluent_kafka import ConsumerGroupTopicPartitions, Node, TopicPartition
-from confluent_kafka.admin._group import (
-    ConsumerGroupDescription,
-    ConsumerGroupListing,
-    ListConsumerGroupsResult,
-    MemberDescription,
+from confluent_kafka import (
+    ConsumerGroupTopicPartitions,
+    KafkaError,
+    KafkaException,
+    Node,
+    TopicPartition,
 )
-from confluent_kafka.admin._listoffsets import ListOffsetsResultInfo, OffsetSpec
+from confluent_kafka.admin import (
+    ConsumerGroupDescription,
+    ListConsumerGroupsResult,
+    ListOffsetsResultInfo,
+    MemberDescription,
+    OffsetSpec,
+)
+from confluent_kafka.admin import (
+    ConsumerGroupListing as KafkaGroupListing,
+)
 
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,
+    ConsumerGroupListing,
     ConsumerGroupState,
     ConsumerGroupSummary,
     GroupMember,
@@ -42,7 +52,7 @@ class KafkaConsumerGroupAdapter:
     def __init__(self, gateway: KafkaAdminGateway) -> None:
         self._gateway = gateway
 
-    def list_consumer_groups(self) -> list[ConsumerGroupSummary]:
+    def list_consumer_groups(self) -> ConsumerGroupListing:
         result: ListConsumerGroupsResult = self._gateway.request(
             "consumer group listing",
             lambda admin, timeout: admin.list_consumer_groups(request_timeout=timeout),
@@ -53,14 +63,19 @@ class KafkaConsumerGroupAdapter:
             raise KafkaMetadataError(
                 f"Consumer group listing failed on {len(errors)} broker(s)."
             )
+        codes = tuple(sorted({_error_code(error) for error in errors}))
         if errors:
             # Some brokers answered and others did not: the listing may be
             # incomplete. Groups that were returned are still accurate.
             logger.warning(
                 "consumer group listing is partial",
-                extra={"event": {"failed_brokers": len(errors)}},
+                extra={"event": {"failed_brokers": len(errors), "error_codes": codes}},
             )
-        return [to_summary(listing) for listing in valid]
+        return ConsumerGroupListing(
+            groups=tuple(to_summary(listing) for listing in valid),
+            failed_brokers=len(errors),
+            failure_codes=codes,
+        )
 
     def describe_consumer_group(self, group_id: str) -> ConsumerGroup:
         description: ConsumerGroupDescription = self._gateway.request(
@@ -134,6 +149,15 @@ class KafkaConsumerGroupAdapter:
         }
 
 
+def _error_code(error: object) -> str:
+    """Symbolic Kafka error code of a listing failure (never its message)."""
+    if isinstance(error, KafkaException) and error.args:
+        error = error.args[0]
+    if isinstance(error, KafkaError):
+        return error.name()
+    return type(error).__name__
+
+
 def _not_found(group_id: str) -> str:
     return f"Consumer group '{group_id}' does not exist."
 
@@ -146,7 +170,7 @@ def to_state(state: Enum | None) -> ConsumerGroupState:
     return _STATES.get(state.name, ConsumerGroupState.UNKNOWN)
 
 
-def to_summary(listing: ConsumerGroupListing) -> ConsumerGroupSummary:
+def to_summary(listing: KafkaGroupListing) -> ConsumerGroupSummary:
     return ConsumerGroupSummary(
         group_id=listing.group_id,
         state=to_state(getattr(listing, "state", None)),

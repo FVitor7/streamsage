@@ -161,6 +161,23 @@ def test_sensitive_header_values_are_withheld() -> None:
     assert by_key["bin"].value is None
 
 
+def test_keys_can_be_withheld() -> None:
+    policy = SanitizationPolicy(keys_enabled=False, max_key_bytes=4)
+    result = sanitize_message(_message(key=b"customer-42"), policy)
+    assert result.key is None
+    assert result.key_withheld is True
+    assert result.key_truncated is False
+    assert (result.key_size, result.key_encoding) == (11, ContentEncoding.TEXT)
+
+
+def test_missing_key_is_not_reported_as_withheld() -> None:
+    result = sanitize_message(
+        _message(key=None), SanitizationPolicy(keys_enabled=False)
+    )
+    assert (result.key, result.key_withheld) == (None, False)
+    assert result.key_encoding is ContentEncoding.NULL
+
+
 def test_long_keys_and_header_values_are_truncated() -> None:
     policy = SanitizationPolicy(max_key_bytes=4, max_header_value_bytes=3)
     result = sanitize_message(
@@ -198,3 +215,43 @@ def test_raw_message_repr_never_shows_payload() -> None:
     text = repr(_message(raw))
     assert secret not in text
     assert f"value_size={len(raw)}" in text
+
+
+def test_payloads_above_the_decode_limit_are_never_decoded() -> None:
+    policy = SanitizationPolicy(
+        payloads_enabled=True, max_payload_bytes=10, max_decode_bytes=100
+    )
+    big = json.dumps({"password": random_credential(), "x": "y" * 500}).encode()
+    result = sanitize_message(_message(big), policy)
+    assert result.payload_treatment is PayloadTreatment.TOO_LARGE
+    assert result.payload_preview is None
+    assert result.payload_size == len(big)
+
+
+def test_payload_dropped_by_the_reader_is_reported_as_too_large() -> None:
+    message = RawMessage(
+        topic="t",
+        partition=0,
+        offset=1,
+        timestamp_ms=1,
+        timestamp_type=TimestampType.CREATE_TIME,
+        key=None,
+        value=b"",
+        original_value_size=5_000_000,
+    )
+    result = sanitize_message(message, ENABLED)
+    assert result.payload_treatment is PayloadTreatment.TOO_LARGE
+    assert result.payload_size == 5_000_000
+    assert message.value_truncated is True
+
+
+def test_huge_keys_are_decoded_only_up_to_the_limit() -> None:
+    key = ("ç" * 10_000).encode()  # 20,000 bytes
+    result = sanitize_message(_message(key=key), SanitizationPolicy(max_key_bytes=5))
+    assert result.key == "çç"  # a character cut by the limit is dropped
+    assert (result.key_truncated, result.key_size) == (True, 20_000)
+
+
+def test_decode_limit_must_cover_the_preview_limit() -> None:
+    with pytest.raises(InvalidInputError, match="max_decode_bytes"):
+        SanitizationPolicy(max_payload_bytes=2048, max_decode_bytes=1024)

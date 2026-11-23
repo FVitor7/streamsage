@@ -218,6 +218,10 @@ being silently omitted. Rules:
 
 - Unknown committed or end offsets give `lag: null`, never 0. `total_lag`
   sums only known lags, and `unknown_lag_partition_count` reports the rest.
+- Lag is **offset lag**, an upper bound on unconsumed messages. Compaction
+  leaves gaps in offsets and transaction markers use offsets, so fewer
+  messages may be pending; StreamSage does not count them, which would mean
+  reading them. Descriptions, findings and thresholds speak of offsets.
 - The end offset is the high watermark (read_uncommitted). For consumers
   using `isolation.level=read_committed`, lag may be overstated while
   transactions are open.
@@ -245,10 +249,10 @@ unverified hypotheses.
 | --- | --- | --- |
 | `LAG_ABOVE_CRITICAL` | critical | Some partition lag ≥ critical threshold |
 | `LAG_ABOVE_WARNING` | warning | Some partition lag ≥ warning threshold (and none critical) |
-| `NO_ACTIVE_MEMBERS` | warning | No members while messages are pending |
+| `NO_ACTIVE_MEMBERS` | warning | No members while there is offset lag |
 | `REBALANCING` | warning | Group is preparing or completing a rebalance |
 | `UNASSIGNED_PARTITIONS_WITH_LAG` | warning | Members exist, but partitions with lag are assigned to none |
-| `INACTIVE_CAUGHT_UP` | info | No members and nothing pending |
+| `INACTIVE_CAUGHT_UP` | info | No members and no offset lag |
 | `LAG_UNKNOWN` | info | Some partitions have unknown lag |
 | `NO_PARTITIONS` | info | No committed offsets and no assignments |
 | `STATE_UNKNOWN` | info | Coordinator reported no known state |
@@ -296,8 +300,8 @@ group's committed and end offsets, waits `interval_seconds` (1–60, default
 | Status | Rule |
 | --- | --- |
 | `advancing` | committed offset increased |
-| `caught_up` | committed offset unchanged, nothing pending |
-| `not_advancing` | committed offset unchanged, messages pending |
+| `caught_up` | committed offset unchanged, offset lag 0 |
+| `not_advancing` | committed offset unchanged, offset lag above 0 |
 | `moved_backward` | committed offset decreased (reset or reprocessing) |
 | `unknown` | an offset is missing from either sample |
 
@@ -327,10 +331,26 @@ rest of the server:
   Retention gaps and empty partitions become explicit notes.
 - Pure domain sanitization (`domain/messages/sanitizer.py`) turns raw
   messages into `InspectedMessage`s before they leave the application layer.
-- `KafkaMessageAdapter` creates a short-lived consumer per call, assigns the
-  planned ranges, reads up to their end (or the partition end, or the
-  timeout), and closes the consumer. A timeout yields a partial result
-  marked `complete: false`.
+- `KafkaMessageAdapter` reads partition offsets with two batched ListOffsets
+  requests (earliest and latest) through the gateway, not one watermark
+  request per partition. Partitions whose offsets cannot be read are
+  reported as unavailable, not silently skipped.
+- For reads, it creates a short-lived consumer per call, assigns the planned
+  ranges, reads up to their end (or the partition end, or the timeout), and
+  closes the consumer. A timeout yields a partial result marked
+  `complete: false`.
+- **Bounded resources.** `limit` bounds the output, and
+  `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` bounds how many messages are read.
+  While reading, `NewestMessages` (a heap in `domain/messages/selection.py`)
+  keeps only the `limit` newest, so memory does not grow with the number of
+  partitions. An exact "newest N" needs N messages from every partition.
+  When the budget does not allow that, the plan reads fewer per partition
+  and the result is marked `exact: false`. Payloads above
+  `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` are dropped as they are read (only
+  their size is kept) and are never decoded or parsed.
+  `max.partition.fetch.bytes` does not cap a single message: Kafka always
+  returns at least one whole message, so an oversized message still
+  crosses the network once.
 
 ### Key search
 

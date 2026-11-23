@@ -13,7 +13,13 @@ from streamsage.domain.entities.message import OffsetRange, PartitionOffsets
 from streamsage.domain.exceptions import InvalidInputError, KafkaResourceNotFoundError
 from streamsage.domain.messages.dlq import DlqTopicMatcher
 from streamsage.domain.messages.sanitizer import PayloadTreatment, SanitizationPolicy
-from tests.fakes import FakeMessageReader, FakeTopicReader, make_topic, raw_message
+from tests.fakes import (
+    FakeMessageReader,
+    FakeTopicReader,
+    make_topic,
+    raw_message,
+    untimed_message,
+)
 
 
 def _messages() -> list:
@@ -64,6 +70,31 @@ def test_partial_coverage_is_explained() -> None:
     assert reader.requested_ranges == [(OffsetRange(0, 6, 10), OffsetRange(1, 0, 4))]
     assert "No match does not mean the key is absent" in result.notes[0]
     assert "partition(s) 0" in result.notes[0]
+
+
+def test_scan_budget_smaller_than_partition_count_is_a_hard_limit() -> None:
+    reader = FakeMessageReader(messages=_messages())
+    result = _use_case(reader, total=1).execute("orders", "k-3", limit=5)
+    assert reader.requested_ranges == [(OffsetRange(0, 9, 10),)]
+    assert result.scanned == 1
+    assert result.uncovered_partitions == (1,)
+    assert [c.partition for c in result.coverage] == [0]
+    assert result.searched_whole_topic is False
+    assert any("1 partition(s) were not searched at all" in n for n in result.notes)
+
+
+def test_matches_without_timestamps_are_not_treated_as_oldest() -> None:
+    offsets = [PartitionOffsets(0, 0, 2), PartitionOffsets(1, 0, 1)]
+    newer = untimed_message(0, 1)
+    object.__setattr__(newer, "key", b"k-0")
+    reader = FakeMessageReader(
+        offsets=offsets, messages=[raw_message(0, 0), newer, raw_message(1, 0)]
+    )
+    result = _use_case(reader).execute("orders", "k-0", limit=5)
+    # Partition 0's offset 1 inherits offset 0's timestamp, so it ranks first
+    # there, instead of last as a 1970 timestamp would.
+    assert [(m.partition, m.offset) for m in result.matches][0] == (0, 1)
+    assert any("have no timestamp" in n for n in result.notes)
 
 
 def test_incomplete_scan_is_flagged() -> None:
@@ -146,3 +177,22 @@ def test_dlq_summary_is_capped() -> None:
     overview = _dlq_use_case(["*.DLQ"], names).execute()
     assert len(overview.topics) == MAX_DLQ_TOPICS
     assert "only the first" in overview.notes[0]
+
+
+def test_unavailable_partitions_prevent_whole_topic_claims() -> None:
+    reader = FakeMessageReader(messages=_messages(), unavailable=(5,))
+    result = _use_case(reader).execute("orders", "k-3", limit=5)
+    assert result.searched_whole_topic is False
+    assert result.unavailable_partitions == (5,)
+    assert any("partition(s) 5 are unavailable" in note for note in result.notes)
+
+
+def test_dlq_counts_note_unavailable_partitions() -> None:
+    use_case = ListDlqTopicsUseCase(
+        FakeTopicReader([make_topic("orders.DLQ")]),
+        FakeMessageReader(offsets=[PartitionOffsets(0, 0, 4)], unavailable=(1,)),
+        DlqTopicMatcher(["*.DLQ"]),
+    )
+    overview = use_case.execute()
+    assert [(t.partition_count, t.message_count) for t in overview.topics] == [(2, 4)]
+    assert "1 partition(s) are unavailable" in overview.notes[0]

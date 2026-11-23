@@ -1,6 +1,5 @@
 from confluent_kafka import KafkaError, Node, TopicCollection, TopicPartitionInfo
-from confluent_kafka.admin._metadata import PartitionMetadata, TopicMetadata
-from confluent_kafka.admin._topic import TopicDescription
+from confluent_kafka.admin import PartitionMetadata, TopicDescription, TopicMetadata
 
 from streamsage.domain.entities.topic import Partition, Topic
 from streamsage.infrastructure.kafka.errors import error_code_name

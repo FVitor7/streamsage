@@ -188,11 +188,14 @@ MCP client, and from there to an LLM. The defaults are conservative:
 | Control | Default | Setting |
 | --- | --- | --- |
 | Payloads returned | **No**; size only | `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` |
+| Keys returned | Yes, truncated to 256 bytes; can be withheld | `STREAMSAGE_MESSAGE_KEYS_ENABLED` |
 | Redaction of sensitive JSON fields and headers | Always on | `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` adds terms |
 | Payload preview size | 1 KB, after redaction | `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` |
+| Largest payload decoded or kept in memory | 256 KiB; larger ones are reported as `too_large` with their size | `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` |
+| Messages read per `inspect_messages` call | 10,000 across partitions; only the returned `limit` are kept in memory | `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` |
 | Key and header value size | 256 bytes | – |
 | Messages per call | 20 by default, 100 maximum | `STREAMSAGE_MESSAGE_DEFAULT_LIMIT`, `STREAMSAGE_MESSAGE_MAX_LIMIT` |
-| Key search scan | 1,000 per partition, 10,000 total | `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_*` |
+| Key search scan | 1,000 per partition, 10,000 total (hard limit) | `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_*` |
 | Binary content (Avro, Protobuf, …) | Never decoded | – |
 | Logging of keys, headers, payloads | Never | – |
 
@@ -218,7 +221,7 @@ How redaction works:
 | --- | --- |
 | Redaction relies on **field names**: a secret under an innocuous name (`"note": "my password is …"`) is not detected | Keep payloads disabled, or add field names with `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` |
 | Non-JSON text payloads (`text_truncated`) are truncated, not redacted | Keep payloads disabled for topics with free text |
-| Keys and non-sensitive header values are returned as metadata | Avoid personal data in keys, or do not grant `Read` |
+| Keys and non-sensitive header values are returned as metadata | Set `STREAMSAGE_MESSAGE_KEYS_ENABLED=false` for keys; add header names to `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS`; or do not grant `Read` |
 
 ## Reporting a vulnerability
 

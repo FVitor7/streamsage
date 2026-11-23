@@ -13,7 +13,11 @@ from confluent_kafka import (
     TopicCollection,
     TopicPartition,
 )
-from confluent_kafka.admin._topic import TopicDescription
+from confluent_kafka.admin import (
+    ListOffsetsResultInfo,
+    OffsetSpec,
+    TopicDescription,
+)
 
 from streamsage.domain.entities.message import (
     KeyScanResult,
@@ -23,7 +27,9 @@ from streamsage.domain.entities.message import (
     RawHeader,
     RawMessage,
     TimestampType,
+    TopicOffsets,
 )
+from streamsage.domain.messages.selection import NewestMessages
 from streamsage.infrastructure.kafka.client_events import KafkaErrorEvents
 from streamsage.infrastructure.kafka.consumer import KafkaConsumerFactory
 from streamsage.infrastructure.kafka.errors import translate_kafka_exception
@@ -36,6 +42,7 @@ from streamsage.infrastructure.kafka.gateway import (
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SECONDS = 0.5
+DEFAULT_MAX_VALUE_BYTES = 256 * 1024
 
 
 class KafkaMessageAdapter:
@@ -50,13 +57,17 @@ class KafkaMessageAdapter:
         consumer_factory: KafkaConsumerFactory,
         timeout_seconds: float,
         metrics: KafkaMetrics | None = None,
+        max_value_bytes: int = DEFAULT_MAX_VALUE_BYTES,
     ) -> None:
         self._gateway = gateway
         self._consumer_factory = consumer_factory
         self._timeout_seconds = timeout_seconds
         self._metrics: KafkaMetrics = metrics or NoKafkaMetrics()
+        # Payloads larger than this are not kept (only their size), which
+        # bounds the memory held per retained message.
+        self._max_value_bytes = max_value_bytes
 
-    def partition_offsets(self, topic: str) -> list[PartitionOffsets]:
+    def partition_offsets(self, topic: str) -> TopicOffsets:
         # DescribeTopics never auto-creates the topic (see KafkaTopicAdapter).
         description: TopicDescription = self._gateway.request(
             "topic description",
@@ -66,24 +77,47 @@ class KafkaMessageAdapter:
             not_found_message=f"Topic '{topic}' does not exist.",
         )
         partitions = sorted(p.id for p in description.partitions)
-        with self._metrics.kafka_request("offset lookup"):
-            return self._watermarks(topic, partitions)
+        # Two batched ListOffsets requests (earliest and latest) instead of
+        # one watermark request per partition.
+        # OffsetSpec factories lack type annotations upstream.
+        earliest_spec = OffsetSpec.earliest()  # type: ignore[no-untyped-call]
+        latest_spec = OffsetSpec.latest()  # type: ignore[no-untyped-call]
+        earliest = self._list_offsets(
+            topic, partitions, earliest_spec, "earliest offset lookup"
+        )
+        latest = self._list_offsets(
+            topic, partitions, latest_spec, "log end offset lookup"
+        )
+        available: list[PartitionOffsets] = []
+        unavailable: list[int] = []
+        for partition in partitions:
+            low, high = earliest.get(partition), latest.get(partition)
+            if low is None or high is None:
+                unavailable.append(partition)
+            else:
+                available.append(PartitionOffsets(partition, low, high))
+        return TopicOffsets(tuple(available), tuple(unavailable))
 
-    def _watermarks(self, topic: str, partitions: list[int]) -> list[PartitionOffsets]:
-        events = KafkaErrorEvents()
-        consumer = self._consumer_factory.create(events)
-        try:
-            offsets = []
-            for partition in partitions:
-                low, high = consumer.get_watermark_offsets(
-                    TopicPartition(topic, partition), timeout=self._timeout_seconds
-                )
-                offsets.append(PartitionOffsets(partition, low, high))
-            return offsets
-        except KafkaException as exc:
-            raise self._failure(exc, consumer, events, "offset lookup") from exc
-        finally:
-            consumer.close()
+    def _list_offsets(
+        self, topic: str, partitions: list[int], spec: OffsetSpec, operation: str
+    ) -> dict[int, int | None]:
+        if not partitions:
+            return {}
+        requested = {TopicPartition(topic, p): spec for p in partitions}
+        results: dict[TopicPartition, ListOffsetsResultInfo | None] = (
+            self._gateway.request_each(
+                operation,
+                lambda admin, timeout: admin.list_offsets(
+                    requested, request_timeout=timeout
+                ),
+            )
+        )
+        return {
+            tp.partition: (
+                info.offset if info is not None and info.offset >= 0 else None
+            )
+            for tp, info in results.items()
+        }
 
     def read_range(
         self, topic: str, ranges: Sequence[OffsetRange]
@@ -93,6 +127,46 @@ class KafkaMessageAdapter:
             return MessageReadResult(messages=(), complete=True)
         with self._metrics.kafka_request("message read"):
             return self._read_ranges(topic, wanted)
+
+    def read_newest(
+        self, topic: str, ranges: Sequence[OffsetRange], limit: int
+    ) -> MessageReadResult:
+        wanted = {r.partition: r for r in ranges if r.size > 0}
+        if not wanted:
+            return MessageReadResult(messages=(), complete=True)
+        newest = NewestMessages(limit)
+        events = KafkaErrorEvents()
+        consumer = self._consumer_factory.create(events)
+        try:
+            with self._metrics.kafka_request("message read"):
+                complete = self._consume(
+                    consumer,
+                    topic,
+                    wanted,
+                    lambda m: newest.offer(self._to_raw(m, topic)),
+                )
+        except KafkaException as exc:
+            raise self._failure(exc, consumer, events, "message read") from exc
+        finally:
+            consumer.close()
+        logger.info(
+            "newest messages read",
+            extra={
+                "event": {
+                    "partitions": len(wanted),
+                    "messages_read": newest.offered,
+                    "kept": len(newest),
+                    "without_timestamp": newest.without_timestamp,
+                    "complete": complete,
+                }
+            },
+        )
+        return MessageReadResult(
+            messages=newest.newest_first(),
+            complete=complete,
+            messages_read=newest.offered,
+            without_timestamp=newest.without_timestamp,
+        )
 
     def _read_ranges(
         self, topic: str, wanted: dict[int, OffsetRange]
@@ -125,7 +199,7 @@ class KafkaMessageAdapter:
             nonlocal scanned
             scanned += 1
             if message.key() == key:
-                newest[message.partition() or 0].append(to_raw_message(message, topic))
+                newest[message.partition() or 0].append(self._to_raw(message, topic))
 
         events = KafkaErrorEvents()
         consumer = self._consumer_factory.create(events)
@@ -155,7 +229,7 @@ class KafkaMessageAdapter:
     ) -> MessageReadResult:
         messages: list[RawMessage] = []
         complete = self._consume(
-            consumer, topic, wanted, lambda m: messages.append(to_raw_message(m, topic))
+            consumer, topic, wanted, lambda m: messages.append(self._to_raw(m, topic))
         )
         logger.info(
             "messages read",
@@ -167,7 +241,12 @@ class KafkaMessageAdapter:
                 }
             },
         )
-        return MessageReadResult(messages=tuple(messages), complete=complete)
+        return MessageReadResult(
+            messages=tuple(messages), complete=complete, messages_read=len(messages)
+        )
+
+    def _to_raw(self, message: Message, topic: str) -> RawMessage:
+        return to_raw_message(message, topic, self._max_value_bytes)
 
     def _consume(
         self,
@@ -234,9 +313,25 @@ _TIMESTAMP_TYPES = {
 }
 
 
-def to_raw_message(message: Message, topic: str) -> RawMessage:
+def to_raw_message(
+    message: Message, topic: str, max_value_bytes: int | None = None
+) -> RawMessage:
+    """Convert a consumer message, dropping payloads above ``max_value_bytes``.
+
+    A dropped payload keeps its size (``original_value_size``), so it is
+    reported as too large instead of being held in memory.
+    """
     timestamp_type, timestamp = message.timestamp()
     kind = _TIMESTAMP_TYPES.get(timestamp_type, TimestampType.NOT_AVAILABLE)
+    value = message.value()
+    original_size = None
+    if (
+        value is not None
+        and max_value_bytes is not None
+        and len(value) > max_value_bytes
+    ):
+        original_size = len(value)
+        value = b""
     return RawMessage(
         topic=message.topic() or topic,
         partition=message.partition() or 0,
@@ -244,8 +339,9 @@ def to_raw_message(message: Message, topic: str) -> RawMessage:
         timestamp_ms=timestamp if kind is not TimestampType.NOT_AVAILABLE else None,
         timestamp_type=kind,
         key=message.key(),
-        value=message.value(),
+        value=value,
         headers=tuple(_to_header(k, v) for k, v in _header_items(message)),
+        original_value_size=original_size,
     )
 
 

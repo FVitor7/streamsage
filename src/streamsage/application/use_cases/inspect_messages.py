@@ -2,12 +2,17 @@ from dataclasses import dataclass
 
 from streamsage.application.ports.message_reader import MessageReader
 from streamsage.domain.exceptions import InvalidInputError
-from streamsage.domain.messages.planning import plan_from_offset, plan_latest
+from streamsage.domain.messages.planning import (
+    plan_from_offset,
+    plan_latest,
+    readable_partitions,
+)
 from streamsage.domain.messages.sanitizer import (
     InspectedMessage,
     SanitizationPolicy,
     sanitize_message,
 )
+from streamsage.domain.messages.selection import uncertain_order_note
 from streamsage.domain.value_objects.topic_name import validate_topic_name
 
 
@@ -18,6 +23,11 @@ class InspectionResult:
     payloads_included: bool
     max_payload_bytes: int
     complete: bool
+    exact: bool
+    """True when the messages are guaranteed to be the newest in the topic
+    (or the requested range); False when the read budget, unavailable
+    partitions or a timeout limited what was read."""
+    messages_read: int
     notes: tuple[str, ...]
 
 
@@ -28,14 +38,22 @@ class InspectMessagesUseCase:
     the selected partitions, newest first). With ``start_offset`` (which
     requires ``partition``), returns up to ``limit`` messages from there, in
     offset order.
+
+    ``limit`` bounds the output; ``max_read`` bounds how many messages may be
+    read to produce it. Only ``limit`` messages are ever held in memory.
     """
 
     def __init__(
-        self, reader: MessageReader, policy: SanitizationPolicy, max_messages: int
+        self,
+        reader: MessageReader,
+        policy: SanitizationPolicy,
+        max_messages: int,
+        max_read: int = 10_000,
     ) -> None:
         self._reader = reader
         self._policy = policy
         self._max_messages = max_messages
+        self._max_read = max_read
 
     def execute(
         self,
@@ -47,21 +65,24 @@ class InspectMessagesUseCase:
         name = validate_topic_name(topic)
         self._validate(limit, partition, start_offset)
         offsets = self._reader.partition_offsets(name)
+        readable, unavailable, notes_ = readable_partitions(offsets, partition)
+        notes = list(notes_)
         if start_offset is not None and partition is not None:
-            plan = plan_from_offset(offsets, partition, start_offset, limit)
-        else:
-            plan = plan_latest(offsets, limit, partition)
-        result = self._reader.read_range(name, plan.ranges)
-
-        if start_offset is None:
-            ordered = sorted(
-                result.messages,
-                key=lambda m: (m.timestamp_ms or 0, m.offset),
-                reverse=True,
-            )[:limit]
-        else:
+            forward = plan_from_offset(readable, partition, start_offset, limit)
+            result = self._reader.read_range(name, forward.ranges)
             ordered = sorted(result.messages, key=lambda m: (m.partition, m.offset))
-        notes = list(plan.notes)
+            exact = True
+            notes.extend(forward.notes)
+        else:
+            latest = plan_latest(readable, limit, self._max_read, partition)
+            result = self._reader.read_newest(name, latest.ranges, limit)
+            ordered = list(result.messages)
+            exact = latest.exact and not unavailable
+            notes.extend(latest.notes)
+            if result.without_timestamp and len(latest.ranges) > 1:
+                # "Newest" across partitions needs timestamps.
+                exact = False
+                notes.append(uncertain_order_note(result.without_timestamp))
         if not result.complete:
             notes.append(
                 "The read stopped before all requested messages were received "
@@ -73,6 +94,8 @@ class InspectMessagesUseCase:
             payloads_included=self._policy.payloads_enabled,
             max_payload_bytes=self._policy.max_payload_bytes,
             complete=result.complete,
+            exact=exact and result.complete,
+            messages_read=result.messages_read,
             notes=tuple(notes),
         )
 

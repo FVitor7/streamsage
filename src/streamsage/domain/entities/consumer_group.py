@@ -31,6 +31,24 @@ class ConsumerGroupSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ConsumerGroupListing:
+    """Groups returned by a listing, and whether every broker answered.
+
+    Kafka lists groups by asking every broker. If some fail, the groups that
+    were returned are accurate but others may be missing: a group absent
+    from an incomplete listing may still exist.
+    """
+
+    groups: tuple[ConsumerGroupSummary, ...]
+    failed_brokers: int = 0
+    failure_codes: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return self.failed_brokers == 0
+
+
+@dataclass(frozen=True, slots=True)
 class GroupMember:
     member_id: str
     client_id: str

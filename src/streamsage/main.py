@@ -93,10 +93,13 @@ def build_application(settings: Settings) -> Iterator[Application]:
             KafkaConsumerFactory(settings),
             timeout_seconds=settings.kafka_request_timeout,
             metrics=metrics,
+            max_value_bytes=settings.message_max_decode_bytes,
         )
         sanitization = SanitizationPolicy(
             payloads_enabled=settings.message_payloads_enabled,
+            keys_enabled=settings.message_keys_enabled,
             max_payload_bytes=settings.message_max_payload_bytes,
+            max_decode_bytes=settings.message_max_decode_bytes,
             sensitive_terms=DEFAULT_SENSITIVE_TERMS | settings.extra_sensitive_fields,
         )
         server = create_server(
@@ -118,7 +121,10 @@ def build_application(settings: Settings) -> Iterator[Application]:
                 group_reader, policy
             ),
             inspect_messages_use_case=InspectMessagesUseCase(
-                message_reader, sanitization, settings.message_max_limit
+                message_reader,
+                sanitization,
+                settings.message_max_limit,
+                max_read=settings.message_inspect_max_read,
             ),
             find_messages_by_key_use_case=FindMessagesByKeyUseCase(
                 message_reader,

@@ -19,6 +19,7 @@ from streamsage.domain.diagnostics.severity import HealthStatus, Severity
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,
+    ConsumerGroupListing,
     ConsumerGroupState,
     ConsumerGroupSummary,
     GroupMember,
@@ -165,15 +166,35 @@ class ConsumerGroupSummaryResponse(BaseModel):
 
 class ConsumerGroupListResponse(BaseModel):
     group_count: int
+    complete: bool = Field(
+        description=(
+            "False when some brokers did not answer: groups listed are "
+            "accurate, but a group missing from the list may still exist."
+        )
+    )
+    failed_broker_count: int
+    failure_codes: list[str] = Field(description="Kafka error codes of the failures.")
+    notes: list[str]
     groups: list[ConsumerGroupSummaryResponse]
 
     @classmethod
-    def from_domain(
-        cls, groups: list[ConsumerGroupSummary]
-    ) -> "ConsumerGroupListResponse":
+    def from_domain(cls, listing: ConsumerGroupListing) -> "ConsumerGroupListResponse":
+        notes = []
+        if not listing.complete:
+            notes.append(
+                f"The listing is incomplete: {listing.failed_brokers} broker(s) "
+                "did not answer. A group missing from this list may still exist; "
+                "use describe_consumer_group to check a specific group."
+            )
         return cls(
-            group_count=len(groups),
-            groups=[ConsumerGroupSummaryResponse.from_domain(g) for g in groups],
+            group_count=len(listing.groups),
+            complete=listing.complete,
+            failed_broker_count=listing.failed_brokers,
+            failure_codes=list(listing.failure_codes),
+            notes=notes,
+            groups=[
+                ConsumerGroupSummaryResponse.from_domain(g) for g in listing.groups
+            ],
         )
 
 
@@ -238,8 +259,10 @@ class PartitionLagResponse(BaseModel):
     )
     lag: int | None = Field(
         description=(
-            "log_end_offset - committed_offset, or null when either is unknown. "
-            "Unknown lag is never reported as 0."
+            "Offset lag: log_end_offset - committed_offset, or null when either "
+            "is unknown. Unknown lag is never reported as 0. An upper bound on "
+            "unconsumed messages, not an exact count: compaction and "
+            "transaction markers can make the real number smaller."
         )
     )
 
@@ -257,7 +280,10 @@ class PartitionLagResponse(BaseModel):
 class ConsumerLagResponse(BaseModel):
     group_id: str
     total_lag: int | None = Field(
-        description="Sum of known partition lags; null if no lag is known."
+        description=(
+            "Sum of known partition offset lags (offsets behind, an upper bound "
+            "on unconsumed messages); null if no lag is known."
+        )
     )
     max_lag: int | None
     partition_count: int
@@ -449,17 +475,26 @@ class MessageResponse(BaseModel):
     offset: int
     timestamp: str | None = Field(description="ISO 8601 UTC, or null if unavailable.")
     timestamp_type: TimestampType
-    key: str | None = Field(description="Decoded UTF-8 key (truncated), or null.")
+    key: str | None = Field(
+        description=(
+            "Decoded UTF-8 key (truncated), or null if there is no key or it "
+            "is withheld."
+        )
+    )
     key_size: int | None
     key_encoding: ContentEncoding
     key_truncated: bool
+    key_withheld: bool = Field(
+        description="True if the server is configured not to return keys."
+    )
     headers: list[MessageHeaderResponse]
     payload_size: int | None = Field(description="Payload size in bytes; null if none.")
     payload_treatment: PayloadTreatment = Field(
         description=(
             "omitted (payloads disabled), null (no payload), json_redacted "
             "(sensitive fields redacted, then truncated), text_truncated (not "
-            "JSON: truncated only), binary (not decoded)."
+            "JSON: truncated only), binary (not decoded), too_large (above the "
+            "decode limit: not decoded, size only)."
         )
     )
     payload_preview: str | None
@@ -484,6 +519,7 @@ class MessageResponse(BaseModel):
             key_size=message.key_size,
             key_encoding=message.key_encoding,
             key_truncated=message.key_truncated,
+            key_withheld=message.key_withheld,
             headers=[MessageHeaderResponse.from_domain(h) for h in message.headers],
             payload_size=message.payload_size,
             payload_treatment=message.payload_treatment,
@@ -503,6 +539,16 @@ class MessageInspectionResponse(BaseModel):
     max_payload_bytes: int
     message_count: int
     complete: bool = Field(description="False if the read stopped early (timeout).")
+    exact: bool = Field(
+        description=(
+            "True when these are guaranteed to be the newest messages (or the "
+            "requested range). False when the read budget, unavailable "
+            "partitions or a timeout limited what was read; see notes."
+        )
+    )
+    messages_read: int = Field(
+        description="Messages read from Kafka to produce this result."
+    )
     notes: list[str]
     messages: list[MessageResponse]
 
@@ -531,6 +577,15 @@ class KeySearchResponse(BaseModel):
     complete: bool
     payloads_included: bool
     coverage: list[ScanCoverageResponse]
+    uncovered_partitions: list[int] = Field(
+        description=(
+            "Partitions not searched at all because the scan budget is "
+            "smaller than the number of partitions."
+        )
+    )
+    unavailable_partitions: list[int] = Field(
+        description="Partitions whose offsets could not be read."
+    )
     notes: list[str]
     matches: list[MessageResponse] = Field(description="Newest first.")
 

@@ -2,10 +2,12 @@
 
 import secrets
 from collections.abc import Sequence
+from dataclasses import replace
 
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,
+    ConsumerGroupListing,
     ConsumerGroupState,
     ConsumerGroupSummary,
     GroupMember,
@@ -19,9 +21,11 @@ from streamsage.domain.entities.message import (
     RawHeader,
     RawMessage,
     TimestampType,
+    TopicOffsets,
 )
 from streamsage.domain.entities.topic import Partition, Topic
 from streamsage.domain.exceptions import KafkaResourceNotFoundError
+from streamsage.domain.messages.selection import NewestMessages
 from streamsage.domain.value_objects.lag import PartitionLag
 
 
@@ -141,17 +145,22 @@ class FakeConsumerGroupReader:
         group: ConsumerGroup = SAMPLE_GROUP,
         lag: list[PartitionLag] | None = None,
         error: Exception | None = None,
+        failed_brokers: int = 0,
     ) -> None:
         self.groups = SAMPLE_GROUPS if groups is None else groups
+        self.failed_brokers = failed_brokers
         self.group = group
         self.lag = SAMPLE_LAG if lag is None else lag
         self.error = error
         self.requested: list[str] = []
 
-    def list_consumer_groups(self) -> list[ConsumerGroupSummary]:
+    def list_consumer_groups(self) -> ConsumerGroupListing:
         if self.error is not None:
             raise self.error
-        return list(self.groups)
+        codes = ("_TRANSPORT",) if self.failed_brokers else ()
+        return ConsumerGroupListing(
+            tuple(self.groups), failed_brokers=self.failed_brokers, failure_codes=codes
+        )
 
     def describe_consumer_group(self, group_id: str) -> ConsumerGroup:
         self.requested.append(group_id)
@@ -189,6 +198,15 @@ def raw_message(
     )
 
 
+def untimed_message(partition: int, offset: int) -> RawMessage:
+    """A message without a timestamp (old message format)."""
+    return replace(
+        raw_message(partition, offset),
+        timestamp_ms=None,
+        timestamp_type=TimestampType.NOT_AVAILABLE,
+    )
+
+
 class FakeMessageReader:
     """Serves messages from an in-memory log, honoring the requested ranges."""
 
@@ -198,7 +216,9 @@ class FakeMessageReader:
         messages: list[RawMessage] | None = None,
         complete: bool = True,
         error: Exception | None = None,
+        unavailable: tuple[int, ...] = (),
     ) -> None:
+        self.unavailable = unavailable
         self.offsets = (
             [PartitionOffsets(0, 0, 10), PartitionOffsets(1, 0, 4)]
             if offsets is None
@@ -214,24 +234,43 @@ class FakeMessageReader:
         self.error = error
         self.requested_ranges: list[tuple[OffsetRange, ...]] = []
 
-    def partition_offsets(self, topic: str) -> list[PartitionOffsets]:
+    def partition_offsets(self, topic: str) -> TopicOffsets:
         if self.error is not None:
             raise self.error
         if topic == "missing":
             raise KafkaResourceNotFoundError(f"Topic '{topic}' does not exist.")
-        return list(self.offsets)
+        return TopicOffsets(tuple(self.offsets), self.unavailable)
+
+    def _in_ranges(self, ranges: Sequence[OffsetRange]) -> list[RawMessage]:
+        return [
+            m
+            for m in self.messages
+            for r in ranges
+            if m.partition == r.partition and r.start <= m.offset < r.stop
+        ]
+
+    def read_newest(
+        self, topic: str, ranges: Sequence[OffsetRange], limit: int
+    ) -> MessageReadResult:
+        self.requested_ranges.append(tuple(ranges))
+        newest = NewestMessages(limit)
+        for message in self._in_ranges(ranges):
+            newest.offer(message)
+        return MessageReadResult(
+            messages=newest.newest_first(),
+            complete=self.complete,
+            messages_read=newest.offered,
+            without_timestamp=newest.without_timestamp,
+        )
 
     def read_range(
         self, topic: str, ranges: Sequence[OffsetRange]
     ) -> MessageReadResult:
         self.requested_ranges.append(tuple(ranges))
-        selected = tuple(
-            m
-            for m in self.messages
-            for r in ranges
-            if m.partition == r.partition and r.start <= m.offset < r.stop
+        selected = tuple(self._in_ranges(ranges))
+        return MessageReadResult(
+            messages=selected, complete=self.complete, messages_read=len(selected)
         )
-        return MessageReadResult(messages=selected, complete=self.complete)
 
     def find_by_key(
         self,

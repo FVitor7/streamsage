@@ -48,9 +48,12 @@ async def test_inspect_messages_without_payloads(client: Client) -> None:
     assert data is not None
     assert data["payloads_included"] is False
     assert data["message_count"] == 1
+    assert data["exact"] is True
+    assert data["messages_read"] == 1
     message = data["messages"][0]
     assert message["timestamp"] == "2023-11-14T22:13:20+00:00"
     assert message["key"] == "cust-1"
+    assert message["key_withheld"] is False
     assert message["payload_treatment"] == "omitted"
     assert message["payload_preview"] is None
     assert message["payload_size"] == len(SENSITIVE.value or b"")
@@ -123,6 +126,28 @@ async def test_missing_topic_and_errors_are_controlled(client: Client) -> None:
 
 
 @pytest.mark.anyio
+async def test_keys_can_be_withheld_from_every_message_tool() -> None:
+    from streamsage.domain.entities.message import PartitionOffsets
+
+    reader = FakeMessageReader(
+        offsets=[PartitionOffsets(0, 0, 4)], messages=[SENSITIVE]
+    )
+    async with Client(build(message_reader=reader, keys_enabled=False)) as c:
+        inspected = await c.call_tool("inspect_messages", {"topic_name": "customers"})
+        found = await c.call_tool(
+            "find_messages_by_key", {"topic_name": "customers", "key": "cust-1"}
+        )
+    for result in (inspected, found):
+        data = result.structured_content
+        assert data is not None
+        (message,) = data["matches" if "matches" in data else "messages"]
+        assert message["key"] is None
+        assert message["key_withheld"] is True
+        assert message["key_size"] == len(b"cust-1")
+        assert "cust-1" not in str(message)
+
+
+@pytest.mark.anyio
 async def test_find_messages_by_key() -> None:
     from streamsage.domain.entities.message import PartitionOffsets
     from tests.fakes import raw_message
@@ -149,6 +174,8 @@ async def test_find_messages_by_key() -> None:
             "reaches_start": True,
         }
     ]
+    assert data["uncovered_partitions"] == []
+    assert data["unavailable_partitions"] == []
 
 
 @pytest.mark.anyio

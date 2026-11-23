@@ -2,11 +2,19 @@ from dataclasses import dataclass
 
 from streamsage.application.ports.message_reader import MessageReader
 from streamsage.domain.exceptions import InvalidInputError
-from streamsage.domain.messages.planning import ScanCoverage, plan_key_scan
+from streamsage.domain.messages.planning import (
+    ScanCoverage,
+    plan_key_scan,
+    readable_partitions,
+)
 from streamsage.domain.messages.sanitizer import (
     InspectedMessage,
     SanitizationPolicy,
     sanitize_message,
+)
+from streamsage.domain.messages.selection import (
+    order_newest_first,
+    uncertain_order_note,
 )
 from streamsage.domain.value_objects.topic_name import validate_topic_name
 
@@ -34,10 +42,17 @@ class KeySearchResult:
     coverage: tuple[ScanCoverage, ...]
     complete: bool
     notes: tuple[str, ...]
+    unavailable_partitions: tuple[int, ...] = ()
+    uncovered_partitions: tuple[int, ...] = ()
 
     @property
     def searched_whole_topic(self) -> bool:
-        return self.complete and all(c.reaches_start for c in self.coverage)
+        return (
+            self.complete
+            and not self.unavailable_partitions
+            and not self.uncovered_partitions
+            and all(c.reaches_start for c in self.coverage)
+        )
 
 
 class FindMessagesByKeyUseCase:
@@ -64,18 +79,22 @@ class FindMessagesByKeyUseCase:
         name = validate_topic_name(topic)
         key_bytes = self._validate(key, limit, partition)
         offsets = self._reader.partition_offsets(name)
+        readable, unavailable, unavailable_notes = readable_partitions(
+            offsets, partition
+        )
         plan = plan_key_scan(
-            offsets,
+            readable,
             self._limits.max_scan_per_partition,
             self._limits.max_scan_total,
             partition,
         )
         scan = self._reader.find_by_key(name, plan.ranges, key_bytes, limit)
-        newest = sorted(
-            scan.matches, key=lambda m: (m.timestamp_ms or 0, m.offset), reverse=True
-        )[:limit]
+        newest = order_newest_first(list(scan.matches))[:limit]
 
-        notes = []
+        notes = list(unavailable_notes)
+        untimed = sum(1 for m in scan.matches if m.timestamp_ms is None)
+        if untimed and len({m.partition for m in scan.matches}) > 1:
+            notes.append(uncertain_order_note(untimed))
         partial = [c.partition for c in plan.coverage if not c.reaches_start]
         if partial:
             notes.append(
@@ -83,6 +102,14 @@ class FindMessagesByKeyUseCase:
                 f"partition were searched; older messages in partition(s) "
                 f"{', '.join(map(str, partial))} were not. No match does not "
                 "mean the key is absent."
+            )
+        if plan.uncovered_partitions:
+            notes.append(
+                f"{len(plan.uncovered_partitions)} partition(s) were not searched "
+                "at all because the scan budget "
+                f"({self._limits.max_scan_total} messages) is smaller than the "
+                "number of partitions. Search one partition at a time to cover "
+                "them."
             )
         if not scan.complete:
             notes.append(
@@ -97,6 +124,8 @@ class FindMessagesByKeyUseCase:
             coverage=plan.coverage,
             complete=scan.complete,
             notes=tuple(notes),
+            unavailable_partitions=unavailable,
+            uncovered_partitions=plan.uncovered_partitions,
         )
 
     def _validate(self, key: str, limit: int, partition: int | None) -> bytes:

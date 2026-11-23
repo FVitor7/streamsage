@@ -25,7 +25,7 @@ evidence, never guesses, and **never writes to Kafka**.
 > **Claude** _(calls `list_consumer_groups`, `get_consumer_lag`, `analyze_consumer_health`, `detect_stalled_partitions`)_:
 >
 > **Observed**
-> - `orders-service` has the highest lag: **180 messages** on `orders.created`
+> - `orders-service` has the highest lag: **180 offsets behind** on `orders.created`
 >   (partition 2: 66, partition 1: 60, partition 0: 54).
 > - The group has **no active members** (state `empty`).
 > - Over a 5-second sample, the committed offset of all 3 partitions did not
@@ -164,8 +164,8 @@ http://localhost:8080.
 | --- | --- | --- |
 | "What topics exist in this cluster?" | `list_topics` | 5 topics, e.g. `orders.created` with 3 partitions |
 | "Is any partition under-replicated or without a leader?" | `describe_topic` | None; every partition has a leader and full ISR |
-| "Which consumer groups have the highest lag?" | `list_consumer_groups`, `get_consumer_lag` | `orders-service`: 180 messages |
-| "Is `orders-service` healthy?" | `analyze_consumer_health` | `warning`: no active members while messages are pending |
+| "Which consumer groups have the highest lag?" | `list_consumer_groups`, `get_consumer_lag` | `orders-service`: 180 offsets behind |
+| "Is `orders-service` healthy?" | `analyze_consumer_health` | `warning`: no active members while it is behind |
 | "Is `orders-service` stuck?" | `detect_stalled_partitions` | All 3 partitions `not_advancing` during the sample |
 | "Do we have messages in a DLQ? Why did they fail?" | `list_dlq_topics`, `inspect_messages` | `orders.created.DLQ`: 2 messages, `error.message` headers |
 | "Show me the latest customer updates." | `inspect_messages` | Emails, passwords and phones shown as `[REDACTED]` |
@@ -201,7 +201,7 @@ Configuration comes from `STREAMSAGE_*` environment variables (or a local
 | `STREAMSAGE_TRANSPORT` | `stdio` | `stdio` or `http` (Streamable HTTP) |
 | `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` | `false` | Include sanitized payload previews |
 | `STREAMSAGE_DLQ_TOPICS` | – | DLQ names or globs, e.g. `*.DLQ` |
-| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition lag for a `warning` finding |
+| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition offset lag for a `warning` finding |
 
 Every variable, with SASL/TLS and HTTP examples, is documented in
 [docs/configuration.md](docs/configuration.md).

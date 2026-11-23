@@ -16,7 +16,7 @@ from confluent_kafka import (
     TopicPartition,
     TopicPartitionInfo,
 )
-from confluent_kafka.admin._topic import TopicDescription
+from confluent_kafka.admin import ListOffsetsResultInfo, TopicDescription
 
 from streamsage.domain.entities.message import (
     OffsetRange,
@@ -104,8 +104,35 @@ class FakeFactory:
 
 
 class FakeAdmin:
-    def __init__(self, description: TopicDescription | Exception) -> None:
+    """Admin client double: DescribeTopics and batched ListOffsets."""
+
+    def __init__(
+        self,
+        description: TopicDescription | Exception,
+        offsets: dict[int, tuple[int, int] | Exception] | None = None,
+    ) -> None:
         self.description = description
+        # partition -> (earliest, latest), or an exception for that partition
+        self.offsets = offsets if offsets is not None else {0: (0, 10), 1: (5, 7)}
+        self.list_offsets_calls: list[tuple[str, int]] = []
+
+    def list_offsets(
+        self, requested: dict[TopicPartition, Any], **kwargs: Any
+    ) -> dict[TopicPartition, concurrent.futures.Future[Any]]:
+        futures: dict[TopicPartition, concurrent.futures.Future[Any]] = {}
+        spec_name = type(next(iter(requested.values()))).__name__
+        self.list_offsets_calls.append((spec_name, len(requested)))
+        for tp in requested:
+            future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+            outcome = self.offsets[tp.partition]
+            if isinstance(outcome, Exception):
+                future.set_exception(outcome)
+            else:
+                low, high = outcome
+                offset = low if spec_name == "EarliestSpec" else high
+                future.set_result(ListOffsetsResultInfo(offset, -1, 0))
+            futures[tp] = future
+        return futures
 
     def poll(self, timeout: float) -> int:
         return 0
@@ -132,28 +159,54 @@ def _description(*partitions: int) -> TopicDescription:
 
 
 def _adapter(
-    consumer: FakeConsumer, description: TopicDescription | Exception | None = None
+    consumer: FakeConsumer,
+    description: TopicDescription | Exception | None = None,
+    offsets: dict[int, tuple[int, int] | Exception] | None = None,
+    max_value_bytes: int = 1024,
 ) -> tuple[KafkaMessageAdapter, FakeFactory]:
     gateway = KafkaAdminGateway(
-        FakeAdmin(description or _description(0, 1)),  # type: ignore[arg-type]
+        FakeAdmin(description or _description(0, 1), offsets),  # type: ignore[arg-type]
         timeout_seconds=1,
         error_events=KafkaErrorEvents(),
     )
     factory = FakeFactory(consumer)
     return (
-        KafkaMessageAdapter(gateway, factory, timeout_seconds=1),  # type: ignore[arg-type]
+        KafkaMessageAdapter(
+            gateway,  # type: ignore[arg-type]
+            factory,  # type: ignore[arg-type]
+            timeout_seconds=1,
+            max_value_bytes=max_value_bytes,
+        ),
         factory,
     )
 
 
-def test_partition_offsets_uses_describe_then_watermarks() -> None:
-    consumer = FakeConsumer(watermarks={0: (0, 10), 1: (5, 7)})
-    adapter, _ = _adapter(consumer)
-    assert adapter.partition_offsets("t") == [
-        PartitionOffsets(0, 0, 10),
-        PartitionOffsets(1, 5, 7),
-    ]
-    assert consumer.closed is True
+def test_partition_offsets_use_two_batched_requests_and_no_consumer() -> None:
+    consumer = FakeConsumer()
+    adapter, factory = _adapter(
+        consumer, _description(*range(500)), {p: (p, p + 10) for p in range(500)}
+    )
+    offsets = adapter.partition_offsets("t")
+    assert len(offsets.partitions) == 500
+    assert offsets.partitions[7] == PartitionOffsets(7, 7, 17)
+    assert offsets.unavailable_partitions == ()
+    admin = adapter._gateway._admin_client  # type: ignore[attr-defined]
+    assert admin.list_offsets_calls == [("EarliestSpec", 500), ("LatestSpec", 500)]
+    assert factory.created == 0  # offsets no longer need a consumer
+
+
+def test_partition_with_unreadable_offsets_is_reported_unavailable() -> None:
+    adapter, _ = _adapter(
+        FakeConsumer(),
+        offsets={
+            0: (0, 10),
+            1: KafkaException(KafkaError(KafkaError.LEADER_NOT_AVAILABLE)),
+        },
+    )
+    offsets = adapter.partition_offsets("t")
+    assert offsets.partitions == (PartitionOffsets(0, 0, 10),)
+    assert offsets.unavailable_partitions == (1,)
+    assert offsets.partition_count == 2
 
 
 def test_partition_offsets_of_missing_topic_is_not_found_without_a_consumer() -> None:
@@ -166,14 +219,75 @@ def test_partition_offsets_of_missing_topic_is_not_found_without_a_consumer() ->
     assert factory.created == 0
 
 
-def test_watermark_failure_is_translated_and_consumer_closed() -> None:
-    consumer = FakeConsumer(
-        watermark_error=KafkaException(KafkaError(KafkaError._TRANSPORT))
+def test_connection_failure_during_offset_lookup_is_translated() -> None:
+    adapter, _ = _adapter(
+        FakeConsumer(),
+        offsets={0: KafkaException(KafkaError(KafkaError._TRANSPORT)), 1: (0, 1)},
     )
-    adapter, _ = _adapter(consumer)
     with pytest.raises(KafkaConnectionError):
         adapter.partition_offsets("t")
+
+
+def test_read_newest_keeps_only_the_newest_across_partitions() -> None:
+    def stamped(partition: int, offset: int) -> Message:
+        return Message(
+            topic="t",
+            partition=partition,
+            offset=offset,
+            key=b"k",
+            value=b"v",
+            timestamp=(TIMESTAMP_CREATE_TIME, offset * 10 + partition),
+        )
+
+    queue: list[Message | None] = []
+    for offset in range(50):
+        queue += [stamped(0, offset), stamped(1, offset)]
+    consumer = FakeConsumer(queue)
+    adapter, _ = _adapter(consumer)
+    result = adapter.read_newest("t", [OffsetRange(0, 0, 50), OffsetRange(1, 0, 50)], 3)
+    assert result.messages_read == 100
+    assert [(m.partition, m.offset) for m in result.messages] == [
+        (1, 49),
+        (0, 49),
+        (1, 48),
+    ]
+    assert result.complete is True
     assert consumer.closed is True
+
+
+def test_read_newest_with_nothing_to_read() -> None:
+    adapter, factory = _adapter(FakeConsumer())
+    result = adapter.read_newest("t", [OffsetRange(0, 5, 5)], 3)
+    assert (result.messages, result.complete) == ((), True)
+    assert factory.created == 0
+
+
+def test_large_payloads_are_dropped_while_reading_but_keep_their_size() -> None:
+    big = Message(
+        topic="t",
+        partition=0,
+        offset=0,
+        key=b"k",
+        value=b"x" * 5_000,
+        timestamp=(TIMESTAMP_CREATE_TIME, 1),
+    )
+    small = Message(
+        topic="t",
+        partition=0,
+        offset=1,
+        key=b"k",
+        value=b"x" * 10,
+        timestamp=(TIMESTAMP_CREATE_TIME, 2),
+    )
+    adapter, _ = _adapter(FakeConsumer([big, small]), max_value_bytes=1_024)
+    result = adapter.read_range("t", [OffsetRange(0, 0, 2)])
+    dropped, kept = sorted(result.messages, key=lambda m: m.offset)
+    assert (dropped.value, dropped.value_size, dropped.value_truncated) == (
+        b"",
+        5_000,
+        True,
+    )
+    assert (kept.value, kept.value_truncated) == (b"x" * 10, False)
 
 
 def test_read_range_reads_only_requested_offsets() -> None:
@@ -364,4 +478,13 @@ def test_find_by_key_failures_are_translated() -> None:
     adapter, _ = _adapter(consumer)
     with pytest.raises(KafkaConnectionError):
         adapter.find_by_key("t", [OffsetRange(0, 0, 5)], b"a", 5)
+    assert consumer.closed is True
+
+
+def test_read_newest_failures_are_translated_and_consumer_closed() -> None:
+    fatal = KafkaError(KafkaError._TRANSPORT, fatal=True)
+    consumer = FakeConsumer([Message(topic="t", partition=0, error=fatal)])
+    adapter, _ = _adapter(consumer)
+    with pytest.raises(KafkaConnectionError):
+        adapter.read_newest("t", [OffsetRange(0, 0, 5)], 3)
     assert consumer.closed is True

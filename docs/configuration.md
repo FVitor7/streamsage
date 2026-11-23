@@ -67,12 +67,13 @@ of `kafka:metadata` and `kafka:messages`. See
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition lag (messages) for `LAG_ABOVE_WARNING` |
-| `STREAMSAGE_LAG_CRITICAL_THRESHOLD` | `10000` | Per-partition lag for `LAG_ABOVE_CRITICAL`; must be ≥ warning |
+| `STREAMSAGE_LAG_WARNING_THRESHOLD` | `1000` | Per-partition offset lag (offsets behind) for `LAG_ABOVE_WARNING` |
+| `STREAMSAGE_LAG_CRITICAL_THRESHOLD` | `10000` | Per-partition offset lag for `LAG_ABOVE_CRITICAL`; must be ≥ warning |
 | `STREAMSAGE_FINDING_SEVERITY_OVERRIDES` | `{}` | JSON map of finding code → `info`, `warning` or `critical` |
 
 The thresholds are starting points: tune them to each consumer's normal
-throughput. Overrides change how findings count toward the status, for
+throughput. They compare **offset lag**, which on compacted or transactional
+topics can be higher than the number of messages actually pending. Overrides change how findings count toward the status, for
 example:
 
 ```bash
@@ -89,12 +90,15 @@ Unknown codes are rejected at startup. Valid codes are listed in
 | Variable | Default | Range | Notes |
 | --- | --- | --- | --- |
 | `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` | `false` | boolean | Without it, responses show keys, headers and sizes only |
+| `STREAMSAGE_MESSAGE_KEYS_ENABLED` | `true` | boolean | Set to `false` when keys carry personal data: keys are then withheld (`key_withheld: true`), with only their size shown |
 | `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` | `1024` | `1–65536` | Payload preview limit, applied after redaction |
 | `STREAMSAGE_MESSAGE_DEFAULT_LIMIT` | `20` | ≥ 1 | Default `limit` for `inspect_messages` and `find_messages_by_key` |
 | `STREAMSAGE_MESSAGE_MAX_LIMIT` | `100` | `1–1000` | Maximum `limit`; must be ≥ the default |
+| `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` | `10000` | `1–1000000` | Messages `inspect_messages` may read per call, across partitions; must be ≥ the max limit. Beyond it the result is marked `exact: false` |
+| `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` | `262144` | `1–16777216` | Payloads larger than this are neither kept in memory nor decoded (`too_large`); must be ≥ the preview limit |
 | `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` | – | comma-separated names | Extra field and header names to redact, added to the built-in list |
 | `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION` | `1000` | `1–100000` | Newest messages scanned per partition by key search |
-| `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` | `10000` | `1–1000000` | Total key-search budget, split across partitions |
+| `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` | `10000` | `1–1000000` | Hard limit on messages scanned per key search, split across non-empty partitions. With more partitions than this, the rest are reported as uncovered |
 | `STREAMSAGE_DLQ_TOPICS` | – | comma-separated names and globs | Topics treated as DLQs, e.g. `*.DLQ,dead-letter-*` (case-sensitive) |
 
 The built-in sensitive terms are `password`, `passwd`, `pwd`, `secret`,

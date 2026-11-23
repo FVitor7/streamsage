@@ -194,6 +194,7 @@ def test_invalid_finding_severity_overrides(
 def test_message_inspection_defaults() -> None:
     settings = Settings()
     assert settings.message_payloads_enabled is False
+    assert settings.message_keys_enabled is True
     assert settings.message_max_payload_bytes == 1024
     assert (settings.message_default_limit, settings.message_max_limit) == (20, 100)
     assert settings.extra_sensitive_fields == frozenset()
@@ -282,3 +283,13 @@ def test_non_loopback_http_host_is_detected() -> None:
 
 def test_metrics_are_protected_by_default() -> None:
     assert Settings().http_metrics_public is False
+
+
+def test_message_read_limits_defaults_and_validation() -> None:
+    settings = Settings()
+    assert settings.message_inspect_max_read == 10_000
+    assert settings.message_max_decode_bytes == 262_144
+    with pytest.raises(ValidationError, match="MAX_DECODE_BYTES"):
+        Settings(message_max_decode_bytes=512, message_max_payload_bytes=1024)
+    with pytest.raises(ValidationError, match="INSPECT_MAX_READ"):
+        Settings(message_inspect_max_read=50, message_max_limit=100)

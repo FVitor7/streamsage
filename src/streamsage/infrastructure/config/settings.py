@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     http_metrics_public: bool = False
     include_internal_topics: bool = False
 
-    # Per-partition lag, in messages, used by analyze_consumer_health.
+    # Per-partition offset lag (offsets behind, an upper bound on unconsumed
+    # messages) used by analyze_consumer_health.
     # Starting points only: tune them to each consumer's normal throughput.
     lag_warning_threshold: int = Field(default=1_000, ge=1)
     lag_critical_threshold: int = Field(default=10_000, ge=1)
@@ -80,9 +81,15 @@ class Settings(BaseSettings):
 
     # Message inspection (M4). Payloads are omitted unless explicitly enabled.
     message_payloads_enabled: bool = False
+    message_keys_enabled: bool = True
     message_max_payload_bytes: int = Field(default=1024, ge=1, le=65_536)
     message_default_limit: int = Field(default=20, ge=1)
     message_max_limit: int = Field(default=100, ge=1, le=1_000)
+    # Messages read at most per inspect_messages call (across partitions);
+    # beyond it the result is marked as not exact.
+    message_inspect_max_read: int = Field(default=10_000, ge=1, le=1_000_000)
+    # Payloads above this size are neither kept nor decoded (size only).
+    message_max_decode_bytes: int = Field(default=262_144, ge=1, le=16_777_216)
     # Extra field/header names to redact, comma-separated (added to defaults).
     message_sensitive_fields: str = ""
     # Key search scans at most this many of the newest messages.
@@ -180,6 +187,16 @@ class Settings(BaseSettings):
         names = [token.name for token in self.http_tokens]
         if len(names) != len(set(names)):
             raise ValueError("STREAMSAGE_HTTP_TOKENS names must be unique")
+        if self.message_max_decode_bytes < self.message_max_payload_bytes:
+            raise ValueError(
+                "STREAMSAGE_MESSAGE_MAX_DECODE_BYTES must be at least "
+                "STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES"
+            )
+        if self.message_inspect_max_read < self.message_max_limit:
+            raise ValueError(
+                "STREAMSAGE_MESSAGE_INSPECT_MAX_READ must be at least "
+                "STREAMSAGE_MESSAGE_MAX_LIMIT"
+            )
         if self.message_default_limit > self.message_max_limit:
             raise ValueError(
                 "STREAMSAGE_MESSAGE_DEFAULT_LIMIT must not exceed "

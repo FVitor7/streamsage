@@ -1,5 +1,13 @@
 """Consumer lag value objects.
 
+Lag here is **offset lag**: the distance between the committed offset and
+the log end offset. It is an upper bound on the messages the group has not
+consumed, not an exact count: compaction removes messages but not their
+offsets, and transaction markers use offsets without being messages. For
+example, with offsets 100, 102 and 104 left after compaction and a committed
+offset of 100, the offset lag is 5 while 3 messages remain. Counting the
+real messages would mean reading them, so StreamSage does not claim to.
+
 Missing information is never turned into zero: when the committed offset or
 the log end offset of a partition is unknown, its lag is ``None``.
 """
@@ -9,7 +17,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class PartitionLag:
-    """Lag of one consumer group on one partition.
+    """Offset lag of one consumer group on one partition.
 
     ``log_end_offset`` is the high watermark at the time it was read. ``lag``
     is ``None`` when either offset is unknown. A committed offset ahead of
