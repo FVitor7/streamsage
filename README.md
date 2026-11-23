@@ -117,7 +117,7 @@ want to do:
 **Requirements:** Python 3.12+ and [uv](https://docs.astral.sh/uv/) (or pip).
 
 ```bash
-uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.1.0/streamsage-1.1.0-py3-none-any.whl
+uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.1.1/streamsage-1.1.1-py3-none-any.whl
 streamsage --help
 
 # Connect Claude Code to your cluster
@@ -145,7 +145,7 @@ claude mcp add streamsage-dev -s local \
 ```
 
 The sample environment is part of the repository, not the package. To try
-it with the release package, clone the tag (`git clone --branch v1.1.0 …`)
+it with the release package, clone the tag (`git clone --branch v1.1.1 …`)
 and run `make kafka-up`: it only needs Docker.
 
 Then start a new Claude Code session and ask: *"What topics are in this
@@ -180,14 +180,22 @@ StreamSage is distributed as a Python package through
 
 | Method | Command | Notes |
 | --- | --- | --- |
-| **uv tool** (recommended) | `uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.1.0/streamsage-1.1.0-py3-none-any.whl` | Isolated environment; `streamsage` goes on your `PATH` (`~/.local/bin`) |
+| **uv tool** (recommended) | `uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.1.1/streamsage-1.1.1-py3-none-any.whl` | Isolated environment; `streamsage` goes on your `PATH` (`~/.local/bin`) |
 | **uvx** (no install) | `uvx --from <wheel URL> streamsage` | Runs on demand; handy for trying it or in MCP client configs |
 | **pip** | `pip install <wheel URL>` | Inside a virtual environment you manage |
-| **From a tag** | `uvx --from git+https://github.com/FVitor7/streamsage@v1.1.0 streamsage` | Builds from source at that tag |
+| **From a tag** | `uvx --from git+https://github.com/FVitor7/streamsage@v1.1.1 streamsage` | Builds from source at that tag |
 
 Upgrade with `uv tool install --force <new wheel URL>`, and uninstall with
 `uv tool uninstall streamsage`. Every release lists its wheel and changelog
 on the [releases page](https://github.com/FVitor7/streamsage/releases).
+
+Since v1.1.1, release files carry a signed build provenance attestation.
+To check that a downloaded file was built by this repository's release
+workflow, with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify streamsage-1.1.1-py3-none-any.whl --repo FVitor7/streamsage
+```
 
 ## Configuration
 

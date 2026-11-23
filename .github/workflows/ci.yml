@@ -38,6 +38,45 @@ jobs:
             junit-unit.xml
             coverage.xml
 
+  latest-python:
+    name: Unit tests (newest Python)
+    runs-on: ubuntu-latest
+    env:
+      # The quality job runs the minimum supported Python (.python-version);
+      # this one catches breakage on the newest release users may install.
+      UV_PYTHON: "3.15"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run python --version
+      - run: uv run pytest
+
+  package:
+    name: Package build and install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv build
+      # Each run installs into a fresh environment outside the checkout and
+      # checks version, CLI, MCP handshake and the native Kafka client.
+      - name: Smoke-test the wheel (oldest and newest supported Python)
+        run: |
+          uv run python scripts/smoke_test_package.py dist/*.whl --python 3.12
+          uv run python scripts/smoke_test_package.py dist/*.whl --python 3.15
+      - name: Smoke-test the sdist
+        run: uv run python scripts/smoke_test_package.py dist/*.tar.gz --python 3.12
+
   integration:
     name: Integration tests (real Kafka)
     runs-on: ubuntu-latest

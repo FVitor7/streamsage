@@ -6,6 +6,38 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-23
+
+Release and CI hardening. No change to StreamSage's behavior.
+
+### Added
+- Signed build provenance attestations for release files. Verify a
+  download with
+  `gh attestation verify <file> --repo FVitor7/streamsage`.
+- `scripts/smoke_test_package.py`. It installs a built wheel or sdist into a
+  clean environment and checks:
+  - the version and `py.typed`;
+  - the CLI;
+  - an MCP handshake over stdio;
+  - that the native Kafka client loads.
+
+  CI runs it on every pull request (wheel on Python 3.12 and 3.15, sdist on
+  3.12), and the release workflow runs it before publishing.
+- A CI job that runs the unit tests on the newest Python (3.15).
+- Documentation checks in the unit tests:
+  - relative links and anchors resolve;
+  - example client configs are valid;
+  - every setting is documented;
+  - no document mentions a setting that does not exist.
+
+### Changed
+- Dependabot uses the `uv` ecosystem, so updates include `uv.lock` (the
+  `pip` ecosystem left it stale, failing `uv sync --locked`). It also tracks
+  the `docker-compose.yml` images, and groups dev-tool and GitHub Actions
+  updates.
+- Package metadata lists Python 3.13, 3.14 and 3.15 as supported, in
+  addition to 3.12.
+
 ## [1.1.0] - 2026-11-23
 
 Hardening release from a technical review. Message reads are bounded in
@@ -130,6 +162,7 @@ and investigate problems, with deterministic, evidence-based diagnostics.
 - Documented least-privilege ACLs: `Describe` on cluster, topics and groups,
   plus `Read` on topics only when message inspection is wanted.
 
-[Unreleased]: https://github.com/FVitor7/streamsage/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/FVitor7/streamsage/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/FVitor7/streamsage/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/FVitor7/streamsage/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/FVitor7/streamsage/releases/tag/v1.0.0

@@ -22,7 +22,9 @@ make kafka-up                # local Kafka with sample data
 
 The minimum supported version is Python 3.12 (`requires-python = ">=3.12"`).
 Development and CI run on that minimum, pinned in `.python-version`, so the
-supported floor is always the version under test. ruff
+supported floor is always the version under test. CI also runs the unit
+tests and installs the package on the newest Python (3.15), the version
+`uv tool install` is likely to pick on users' machines. ruff
 (`target-version = "py312"`) and mypy (`python_version = "3.12"`) target the
 same version.
 
@@ -105,12 +107,30 @@ values from Kafka.
 
 ```mermaid
 flowchart LR
-    pr["Pull request / push to main"] --> q["quality<br/>ruff · mypy · unit tests"]
+    pr["Pull request / push to main"] --> q["quality<br/>ruff · mypy · unit tests (3.12)"]
+    pr --> l["latest-python<br/>unit tests (3.15)"]
+    pr --> p["package<br/>build · install · smoke test"]
     pr --> i["integration<br/>Kafka + seed + sample consumer<br/>secured broker<br/>-m integration or security"]
     pr --> z["zizmor · CodeQL · Scorecard"]
-    q & i --> merge["required checks<br/>for merging into main"]
-    tag["git tag vX.Y.Z"] --> r["Release workflow<br/>verify · test · build · GitHub Release"]
+    q & l & p & i --> merge["checks for merging into main"]
+    tag["git tag vX.Y.Z"] --> r["Release workflow<br/>verify · test · build · smoke test<br/>attest · GitHub Release"]
 ```
+
+| Job | What it catches |
+| --- | --- |
+| `quality` | Lint, formatting, strict types and unit tests on the minimum Python, with the locked dependencies |
+| `latest-python` | Breakage on the newest Python release |
+| `package` | A package that builds but does not work once installed: missing files, wrong version, broken entry point, native Kafka client not loading |
+| `integration` | Behavior against real Kafka brokers, plain and secured |
+
+Unit tests also keep the documentation honest (`tests/unit/test_docs.py`):
+relative links and anchors must resolve, the `examples/` client configs
+must be valid, every setting must appear in `docs/configuration.md` and
+`.env.example`, and no document may mention a setting that does not exist.
+
+Dependabot (`.github/dependabot.yml`) proposes weekly updates, after a
+7-day cooldown, for Python dependencies and `uv.lock`, the pinned GitHub
+Actions SHAs, and the images in `docker-compose.yml`.
 
 ## Integration tests
 
@@ -192,9 +212,20 @@ flowchart LR
 
 ```bash
 uv build                                   # dist/streamsage-X.Y.Z.tar.gz and .whl
-uv venv /tmp/ss-venv && VIRTUAL_ENV=/tmp/ss-venv uv pip install dist/*.whl
-/tmp/ss-venv/bin/streamsage --help         # what release users get
+uv run python scripts/smoke_test_package.py dist/*.whl --python 3.12
+uv run python scripts/smoke_test_package.py dist/*.tar.gz
 ```
+
+The smoke test installs the file into a fresh virtual environment, from an
+empty directory, so neither the source tree nor a local `.env` can leak in.
+It checks:
+- the version and `py.typed`;
+- `streamsage --help`;
+- an MCP handshake over stdio that lists every tool and the prompt;
+- a tool call against an unreachable broker, which proves the native Kafka
+  client loads and errors stay safe.
+
+No broker is needed.
 
 ## Releasing
 
@@ -217,6 +248,10 @@ The `Release` workflow (`.github/workflows/release.yml`) then:
 - checks that the tag matches the version in `pyproject.toml`;
 - runs lint, type checks and unit tests;
 - builds the sdist and wheel;
+- smoke-tests the wheel on Python 3.12 and 3.15, and the sdist on 3.12;
+- attests build provenance for both files (signed through Sigstore and
+  stored in the repository; verify with `gh attestation verify <file>
+  --repo FVitor7/streamsage`);
 - creates the GitHub Release, with the matching `CHANGELOG.md` section as
   notes (`scripts/release_notes.py` fails if that section is missing) and
   the built files attached.
