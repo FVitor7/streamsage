@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-23
+
+Hardening release from a technical review. Message reads are bounded in
+messages, memory and payload size, and partial or estimated results always
+say so. Lag and ordering are described more precisely.
+
+**Upgrading:** backward compatible. Responses only gain fields; nothing was
+renamed or removed. The new settings have defaults that every valid 1.0.0
+configuration satisfies. One behavior changed on purpose:
+`find_messages_by_key` never scans more than
+`STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` messages, and on topics with more
+partitions than that it reports the ones it skipped.
+
 ### Added
 - `STREAMSAGE_MESSAGE_KEYS_ENABLED` (default `true`). Set it to `false` to
   withhold message keys from `inspect_messages` and `find_messages_by_key`
@@ -117,5 +130,6 @@ and investigate problems, with deterministic, evidence-based diagnostics.
 - Documented least-privilege ACLs: `Describe` on cluster, topics and groups,
   plus `Read` on topics only when message inspection is wanted.
 
-[Unreleased]: https://github.com/FVitor7/streamsage/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/FVitor7/streamsage/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/FVitor7/streamsage/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/FVitor7/streamsage/releases/tag/v1.0.0

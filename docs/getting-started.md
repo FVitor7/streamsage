@@ -39,7 +39,7 @@ flowchart TD
 ### Option A: use the release package
 
 ```bash
-uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.0.0/streamsage-1.0.0-py3-none-any.whl
+uv tool install https://github.com/FVitor7/streamsage/releases/download/v1.1.0/streamsage-1.1.0-py3-none-any.whl
 streamsage --help        # installed in ~/.local/bin
 ```
 
@@ -71,7 +71,7 @@ have it. With Option A, fetch the files for your version (only Docker is
 needed to run them):
 
 ```bash
-git clone --depth 1 --branch v1.0.0 https://github.com/FVitor7/streamsage.git streamsage-sample
+git clone --depth 1 --branch v1.1.0 https://github.com/FVitor7/streamsage.git streamsage-sample
 cd streamsage-sample
 ```
 

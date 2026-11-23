@@ -30,9 +30,17 @@ def test_changelog_has_notes_for_the_current_version() -> None:
     notes = _release_notes().section(
         (ROOT / "CHANGELOG.md").read_text(), PROJECT["version"]
     )
-    assert "Read-only by design" in notes
+    assert notes.strip()
+    assert "\n### " in f"\n{notes}"  # has at least one subsection
     assert "## [" not in notes  # stops before the next section
     assert "]: https://" not in notes  # excludes link references
+
+
+def test_changelog_links_the_current_version() -> None:
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    version = PROJECT["version"]
+    assert f"\n[{version}]: https://github.com/FVitor7/streamsage/" in changelog
+    assert f"compare/v{version}...HEAD" in changelog
 
 
 def test_release_notes_fail_for_unknown_or_empty_versions() -> None:
