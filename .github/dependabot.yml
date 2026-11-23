@@ -1,14 +1,30 @@
 version: 2
 
+# Weekly updates with a 7-day cooldown, so brand-new releases (the window in
+# which compromised packages are usually caught) are not picked up at once.
+
 updates:
-  # Python dependencies managed by uv through pyproject.toml / uv.lock.
-  - package-ecosystem: pip
+  # Python dependencies: pyproject.toml and uv.lock. The `uv` ecosystem
+  # updates the lock file too, which CI requires (`uv sync --locked`).
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
     open-pull-requests-limit: 10
+    groups:
+      # Tooling changes rarely need individual review. Runtime dependencies
+      # (mcp, confluent-kafka, pydantic, ...) still get one PR each.
+      dev-tools:
+        patterns:
+          - mypy
+          - pre-commit
+          - pytest*
+          - ruff
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - python
@@ -16,7 +32,8 @@ updates:
       prefix: chore
       include: scope
 
-  # Keep GitHub Actions pinned versions up to date.
+  # Actions stay pinned to commit SHAs; Dependabot updates the SHA and the
+  # version comment together.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -24,9 +41,32 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - github-actions
     commit-message:
       prefix: ci
+      include: scope
+
+  # Images in docker-compose.yml (Kafka and Kafka UI) used for local
+  # development and the integration tests.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: chore
       include: scope
