@@ -16,6 +16,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GEN="$ROOT/docker/kafka-secure/.generated"
 SCRAM_USER="streamsage"
+# Same image as the secured broker, read from docker-compose.yml so that
+# Dependabot updates to the compose file apply here too.
+KAFKA_IMAGE="$(docker compose -f "$ROOT/docker-compose.yml" --profile security \
+  config --images kafka-secure)"
 
 mkdir -p "$GEN"
 chmod 700 "$GEN"
@@ -31,7 +35,7 @@ if [[ ! -s "$GEN/broker.keystore.p12" ]]; then
     -v "$GEN:/out" \
     -v "$ROOT/docker/kafka-secure/generate-certs.sh:/generate-certs.sh:ro" \
     --entrypoint bash \
-    apache/kafka:4.3.2 /generate-certs.sh
+    "$KAFKA_IMAGE" /generate-certs.sh
 fi
 # The broker runs as uid 1000 and must be able to read its material.
 chmod 755 "$GEN"
