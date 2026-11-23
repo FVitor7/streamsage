@@ -27,18 +27,35 @@ from tests.fakes import SAMPLE_GROUP, FakeConsumerGroupReader
 
 def test_list_groups_sorted_by_id() -> None:
     result = ListConsumerGroupsUseCase(FakeConsumerGroupReader()).execute()
-    assert [g.group_id for g in result] == ["billing", "legacy", "orders-service"]
+    assert [g.group_id for g in result.groups] == [
+        "billing",
+        "legacy",
+        "orders-service",
+    ]
+    assert result.complete is True
 
 
 def test_list_groups_filtered_by_state() -> None:
     result = ListConsumerGroupsUseCase(FakeConsumerGroupReader()).execute(
         states=[ConsumerGroupState.STABLE, ConsumerGroupState.EMPTY]
     )
-    assert [g.group_id for g in result] == ["billing", "orders-service"]
+    assert [g.group_id for g in result.groups] == ["billing", "orders-service"]
 
 
 def test_list_groups_empty_filter_returns_all() -> None:
-    assert len(ListConsumerGroupsUseCase(FakeConsumerGroupReader()).execute([])) == 3
+    result = ListConsumerGroupsUseCase(FakeConsumerGroupReader()).execute([])
+    assert len(result.groups) == 3
+
+
+def test_list_groups_keeps_partial_listing_information_after_filtering() -> None:
+    reader = FakeConsumerGroupReader(failed_brokers=2)
+    result = ListConsumerGroupsUseCase(reader).execute(
+        states=[ConsumerGroupState.STABLE]
+    )
+    assert [g.group_id for g in result.groups] == ["billing"]
+    assert result.complete is False
+    assert result.failed_brokers == 2
+    assert result.failure_codes == ("_TRANSPORT",)
 
 
 def test_describe_group() -> None:

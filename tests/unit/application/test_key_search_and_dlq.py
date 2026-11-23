@@ -66,6 +66,17 @@ def test_partial_coverage_is_explained() -> None:
     assert "partition(s) 0" in result.notes[0]
 
 
+def test_scan_budget_smaller_than_partition_count_is_a_hard_limit() -> None:
+    reader = FakeMessageReader(messages=_messages())
+    result = _use_case(reader, total=1).execute("orders", "k-3", limit=5)
+    assert reader.requested_ranges == [(OffsetRange(0, 9, 10),)]
+    assert result.scanned == 1
+    assert result.uncovered_partitions == (1,)
+    assert [c.partition for c in result.coverage] == [0]
+    assert result.searched_whole_topic is False
+    assert any("1 partition(s) were not searched at all" in n for n in result.notes)
+
+
 def test_incomplete_scan_is_flagged() -> None:
     reader = FakeMessageReader(messages=_messages(), complete=False)
     result = _use_case(reader).execute("orders", "k-3", limit=5)

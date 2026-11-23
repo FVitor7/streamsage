@@ -6,7 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `STREAMSAGE_MESSAGE_KEYS_ENABLED` (default `true`). Set it to `false` to
+  withhold message keys from `inspect_messages` and `find_messages_by_key`
+  responses, for topics whose keys carry personal data. Messages gain a
+  `key_withheld` field.
+
 ### Fixed
+- `list_consumer_groups` returned a partial list without saying so when some
+  brokers failed to answer. Responses now include `complete`,
+  `failed_broker_count`, `failure_codes` and a note that a missing group may
+  still exist.
+- `find_messages_by_key` could scan more than
+  `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` messages on topics with more
+  partitions than the budget, because each partition got at least one
+  message. The budget is now a hard limit: the first partitions by id are
+  searched and the rest are reported in `uncovered_partitions`. Empty
+  partitions no longer use any budget. Responses also report
+  `unavailable_partitions`.
 - `inspect_messages` could read up to `limit` messages from **every**
   partition and hold them all in memory (for example 50,000 messages for
   `limit=100` on 500 partitions). It now keeps only the `limit` newest while

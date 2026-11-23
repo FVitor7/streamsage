@@ -80,6 +80,7 @@ class Settings(BaseSettings):
 
     # Message inspection (M4). Payloads are omitted unless explicitly enabled.
     message_payloads_enabled: bool = False
+    message_keys_enabled: bool = True
     message_max_payload_bytes: int = Field(default=1024, ge=1, le=65_536)
     message_default_limit: int = Field(default=20, ge=1)
     message_max_limit: int = Field(default=100, ge=1, le=1_000)

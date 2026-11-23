@@ -60,7 +60,9 @@ def register_consumer_tools(
         title="List consumer groups",
         description=(
             "List Kafka consumer groups sorted by id, with their state. "
-            "Optionally filter by one or more states."
+            "Optionally filter by one or more states. If some brokers do not "
+            "answer, the result has complete=false: a group missing from an "
+            "incomplete listing may still exist."
         ),
         annotations=READ_ONLY,
     )
@@ -73,8 +75,8 @@ def register_consumer_tools(
         ctx: Context,
     ) -> ConsumerGroupListResponse:
         with operation_boundary("list_consumer_groups", ToolError, ctx.request_id):
-            groups = list_groups_use_case.execute(states=states)
-        return ConsumerGroupListResponse.from_domain(groups)
+            listing = list_groups_use_case.execute(states=states)
+        return ConsumerGroupListResponse.from_domain(listing)
 
     @server.tool(
         name="describe_consumer_group",

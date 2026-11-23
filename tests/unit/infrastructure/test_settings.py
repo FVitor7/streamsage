@@ -194,6 +194,7 @@ def test_invalid_finding_severity_overrides(
 def test_message_inspection_defaults() -> None:
     settings = Settings()
     assert settings.message_payloads_enabled is False
+    assert settings.message_keys_enabled is True
     assert settings.message_max_payload_bytes == 1024
     assert (settings.message_default_limit, settings.message_max_limit) == (20, 100)
     assert settings.extra_sensitive_fields == frozenset()

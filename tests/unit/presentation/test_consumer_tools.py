@@ -29,6 +29,10 @@ async def test_list_consumer_groups(client: Client) -> None:
     assert result.is_error is False
     assert result.structured_content == {
         "group_count": 3,
+        "complete": True,
+        "failed_broker_count": 0,
+        "failure_codes": [],
+        "notes": [],
         "groups": [
             {"group_id": "billing", "state": "stable", "is_simple": False},
             {"group_id": "legacy", "state": "dead", "is_simple": False},
@@ -47,6 +51,20 @@ async def test_list_consumer_groups_state_filter(client: Client) -> None:
         "billing",
         "orders-service",
     ]
+
+
+@pytest.mark.anyio
+async def test_partial_listing_is_never_presented_as_complete() -> None:
+    reader = FakeConsumerGroupReader(failed_brokers=1)
+    async with Client(build(group_reader=reader)) as c:
+        result = await c.call_tool("list_consumer_groups", {})
+    content = result.structured_content
+    assert content is not None
+    assert content["complete"] is False
+    assert content["failed_broker_count"] == 1
+    assert content["failure_codes"] == ["_TRANSPORT"]
+    assert content["group_count"] == 3
+    assert "may still exist" in content["notes"][0]
 
 
 @pytest.mark.anyio

@@ -39,12 +39,14 @@ class KeySearchResult:
     complete: bool
     notes: tuple[str, ...]
     unavailable_partitions: tuple[int, ...] = ()
+    uncovered_partitions: tuple[int, ...] = ()
 
     @property
     def searched_whole_topic(self) -> bool:
         return (
             self.complete
             and not self.unavailable_partitions
+            and not self.uncovered_partitions
             and all(c.reaches_start for c in self.coverage)
         )
 
@@ -96,6 +98,14 @@ class FindMessagesByKeyUseCase:
                 f"{', '.join(map(str, partial))} were not. No match does not "
                 "mean the key is absent."
             )
+        if plan.uncovered_partitions:
+            notes.append(
+                f"{len(plan.uncovered_partitions)} partition(s) were not searched "
+                "at all because the scan budget "
+                f"({self._limits.max_scan_total} messages) is smaller than the "
+                "number of partitions. Search one partition at a time to cover "
+                "them."
+            )
         if not scan.complete:
             notes.append(
                 "The scan stopped before covering all planned messages "
@@ -110,6 +120,7 @@ class FindMessagesByKeyUseCase:
             complete=scan.complete,
             notes=tuple(notes),
             unavailable_partitions=unavailable,
+            uncovered_partitions=plan.uncovered_partitions,
         )
 
     def _validate(self, key: str, limit: int, partition: int | None) -> bytes:

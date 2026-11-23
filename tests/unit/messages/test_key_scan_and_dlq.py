@@ -22,17 +22,58 @@ def test_key_scan_covers_newest_messages_within_per_partition_budget() -> None:
     assert (coverage[2].scanned_count, coverage[2].reaches_start) == (0, True)
 
 
-def test_total_budget_is_split_across_partitions() -> None:
+def test_total_budget_is_split_across_non_empty_partitions() -> None:
     plan = plan_key_scan(OFFSETS, max_per_partition=1_000, max_total=300)
-    assert plan.per_partition_limit == 100
-    assert plan.ranges[0] == OffsetRange(0, 4_900, 5_000)
+    # Partition 2 is empty, so the budget is split between partitions 0 and 1.
+    assert plan.per_partition_limit == 150
+    assert plan.ranges == (OffsetRange(0, 4_850, 5_000), OffsetRange(1, 250, 400))
+    assert plan.uncovered_partitions == ()
 
 
-def test_budget_never_drops_below_one_message_per_partition() -> None:
-    assert (
-        plan_key_scan(OFFSETS, max_per_partition=10, max_total=1).per_partition_limit
-        == 1
-    )
+def test_total_budget_is_a_hard_limit_with_more_partitions_than_budget() -> None:
+    offsets = [PartitionOffsets(p, low=0, high=50) for p in range(500)]
+    plan = plan_key_scan(offsets, max_per_partition=1_000, max_total=10)
+    assert plan.per_partition_limit == 1
+    assert plan.planned_messages == 10
+    assert [r.partition for r in plan.ranges] == list(range(10))
+    assert plan.uncovered_partitions == tuple(range(10, 500))
+    assert [c.partition for c in plan.coverage] == list(range(10))
+
+
+def test_uncovered_partitions_are_chosen_deterministically() -> None:
+    offsets = [PartitionOffsets(p, low=0, high=5) for p in (7, 3, 9, 1)]
+    plan = plan_key_scan(offsets, max_per_partition=100, max_total=2)
+    assert [r.partition for r in plan.ranges] == [1, 3]
+    assert plan.uncovered_partitions == (7, 9)
+
+
+@pytest.mark.parametrize("partitions", [1, 3, 99, 100, 101, 1_000, 5_000])
+@pytest.mark.parametrize("max_total", [1, 7, 100, 10_000])
+def test_planned_messages_never_exceed_total_budget(
+    partitions: int, max_total: int
+) -> None:
+    offsets = [PartitionOffsets(p, low=0, high=1_000) for p in range(partitions)]
+    plan = plan_key_scan(offsets, max_per_partition=1_000, max_total=max_total)
+    assert plan.planned_messages <= max_total
+    covered = {c.partition for c in plan.coverage}
+    assert covered.isdisjoint(plan.uncovered_partitions)
+    assert len(covered) + len(plan.uncovered_partitions) == partitions
+
+
+def test_empty_partitions_are_covered_without_using_the_budget() -> None:
+    offsets = [PartitionOffsets(p, low=4, high=4) for p in range(5)]
+    offsets.append(PartitionOffsets(5, low=0, high=10))
+    plan = plan_key_scan(offsets, max_per_partition=100, max_total=3)
+    assert plan.ranges == (OffsetRange(5, 7, 10),)
+    assert plan.uncovered_partitions == ()
+    assert all(c.reaches_start for c in plan.coverage if c.partition != 5)
+
+
+def test_budgets_must_be_positive() -> None:
+    with pytest.raises(InvalidInputError):
+        plan_key_scan(OFFSETS, max_per_partition=0, max_total=10)
+    with pytest.raises(InvalidInputError):
+        plan_key_scan(OFFSETS, max_per_partition=10, max_total=0)
 
 
 def test_key_scan_on_one_partition_gets_the_whole_budget() -> None:

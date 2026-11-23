@@ -150,6 +150,8 @@ def register_message_tools(
                 )
                 for c in result.coverage
             ],
+            uncovered_partitions=list(result.uncovered_partitions),
+            unavailable_partitions=list(result.unavailable_partitions),
             notes=list(result.notes),
             matches=[MessageResponse.from_domain(m) for m in result.matches],
         )

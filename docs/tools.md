@@ -151,6 +151,10 @@ broker allows auto-creation.
 ```json
 {
   "group_count": 3,
+  "complete": true,
+  "failed_broker_count": 0,
+  "failure_codes": [],
+  "notes": [],
   "groups": [
     {
       "group_id": "inventory-service",
@@ -173,6 +177,13 @@ broker allows auto-creation.
 
 `is_simple` is `true` for groups that only hold committed offsets and never
 ran the group protocol (for example, offsets set by tooling).
+
+Kafka lists groups by asking every broker. If some brokers fail to answer,
+the groups that were returned are still listed, but the result has
+`complete: false`, the number of brokers that failed, their Kafka error
+codes, and a note: a group missing from an incomplete listing may still
+exist. Check a specific group with `describe_consumer_group`. If no broker
+answers, the call fails.
 
 ### `describe_consumer_group`
 
@@ -456,6 +467,11 @@ the [data protection rules](security.md#data-protection).
 | `too_large` | Above `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` (256 KiB by default): neither kept in memory nor decoded; only the size is shown |
 | `null` | No payload (for example a tombstone) |
 
+Keys are returned by default. With `STREAMSAGE_MESSAGE_KEYS_ENABLED=false`,
+every message has `key: null` and `key_withheld: true`; the key's size and
+encoding are still reported. `find_messages_by_key` keeps working, since the
+caller already knows the key being searched for.
+
 ### `inspect_messages`
 
 Without `start_offset`: the newest messages, newest first. With `partition`
@@ -506,6 +522,7 @@ Reading `customers.updated` (fake personal data) from offset 0:
       "key_size": 6,
       "key_encoding": "text",
       "key_truncated": false,
+      "key_withheld": false,
       "headers": [
         {
           "key": "Authorization",
@@ -604,6 +621,8 @@ partition within budgets, and reports exactly what it covered.
     },
     …
   ],
+  "uncovered_partitions": [],
+  "unavailable_partitions": [],
   "notes": [],
   "matches": [
     {
@@ -615,6 +634,7 @@ partition within budgets, and reports exactly what it covered.
       "key_size": 7,
       "key_encoding": "text",
       "key_truncated": false,
+      "key_withheld": false,
       "headers": [],
       "payload_size": 11,
       "payload_treatment": "json_redacted",
@@ -629,9 +649,16 @@ partition within budgets, and reports exactly what it covered.
 | Field | Meaning |
 | --- | --- |
 | `scanned` | Messages read, matching or not |
-| `per_partition_limit` | Budget per partition: `min(STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION, MAX_TOTAL ÷ partitions)` |
+| `per_partition_limit` | Budget per partition: `min(STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION, MAX_TOTAL ÷ non-empty partitions)`, at least 1 |
 | `coverage[].reaches_start` | The scan reached the oldest message still in the partition |
+| `uncovered_partitions` | Partitions not searched at all, because the topic has more non-empty partitions than `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL`. The first partitions by id are searched, one message each |
+| `unavailable_partitions` | Partitions whose offsets could not be read |
 | `searched_whole_topic` | Every partition fully covered; only then does "no match" mean the key is absent |
+
+`STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` is a hard limit: a call never
+plans to read more messages than that. Empty partitions do not use any of
+the budget. To cover uncovered partitions, search them one at a time with
+`partition`.
 
 ### `list_dlq_topics`
 

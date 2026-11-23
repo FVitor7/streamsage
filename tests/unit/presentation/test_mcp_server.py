@@ -67,13 +67,16 @@ def build(
     policy: SeverityPolicy | None = None,
     message_reader: FakeMessageReader | None = None,
     payloads_enabled: bool = False,
+    keys_enabled: bool = True,
     dlq_patterns: tuple[str, ...] = (),
     metrics: Any = None,
 ) -> Any:
     topic_reader = topic_reader or FakeTopicReader(TOPICS)
     group_reader = group_reader or FakeConsumerGroupReader()
     message_reader = message_reader or FakeMessageReader()
-    sanitization = SanitizationPolicy(payloads_enabled=payloads_enabled)
+    sanitization = SanitizationPolicy(
+        payloads_enabled=payloads_enabled, keys_enabled=keys_enabled
+    )
     return create_server(
         get_cluster_info_use_case=GetClusterInfoUseCase(
             cluster_reader or FakeClusterReader()

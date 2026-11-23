@@ -97,6 +97,7 @@ def build_application(settings: Settings) -> Iterator[Application]:
         )
         sanitization = SanitizationPolicy(
             payloads_enabled=settings.message_payloads_enabled,
+            keys_enabled=settings.message_keys_enabled,
             max_payload_bytes=settings.message_max_payload_bytes,
             max_decode_bytes=settings.message_max_decode_bytes,
             sensitive_terms=DEFAULT_SENSITIVE_TERMS | settings.extra_sensitive_fields,

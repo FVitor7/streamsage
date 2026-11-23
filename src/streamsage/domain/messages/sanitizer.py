@@ -78,6 +78,9 @@ class ContentEncoding(StrEnum):
 @dataclass(frozen=True, slots=True)
 class SanitizationPolicy:
     payloads_enabled: bool = False
+    # Keys often carry identifiers (customer ids, emails). When disabled,
+    # responses report only the key's size and encoding.
+    keys_enabled: bool = True
     max_payload_bytes: int = 1024
     max_key_bytes: int = 256
     max_header_value_bytes: int = 256
@@ -136,6 +139,7 @@ class InspectedMessage:
     payload_preview: str | None
     payload_truncated: bool
     redacted_fields: tuple[str, ...]
+    key_withheld: bool = False
 
 
 def sanitize_message(
@@ -144,6 +148,9 @@ def sanitize_message(
     key, key_encoding, key_truncated = _decode_limited(
         message.key, policy.max_key_bytes
     )
+    key_withheld = message.key is not None and not policy.keys_enabled
+    if key_withheld:
+        key, key_truncated = None, False
     payload = _sanitize_payload(message, policy)
     return InspectedMessage(
         topic=message.topic,
@@ -161,6 +168,7 @@ def sanitize_message(
         payload_preview=payload.preview,
         payload_truncated=payload.truncated,
         redacted_fields=payload.redacted_fields,
+        key_withheld=key_withheld,
     )
 
 

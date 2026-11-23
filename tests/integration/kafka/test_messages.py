@@ -113,7 +113,8 @@ def test_inspection_leaves_no_consumer_group(
 ) -> None:
     _use_case(reader, payloads=False).execute("orders.created", limit=3)
     groups = {
-        g.group_id for g in KafkaConsumerGroupAdapter(gateway).list_consumer_groups()
+        g.group_id
+        for g in KafkaConsumerGroupAdapter(gateway).list_consumer_groups().groups
     }
     assert INSPECTOR_GROUP_ID not in groups
 

@@ -161,6 +161,23 @@ def test_sensitive_header_values_are_withheld() -> None:
     assert by_key["bin"].value is None
 
 
+def test_keys_can_be_withheld() -> None:
+    policy = SanitizationPolicy(keys_enabled=False, max_key_bytes=4)
+    result = sanitize_message(_message(key=b"customer-42"), policy)
+    assert result.key is None
+    assert result.key_withheld is True
+    assert result.key_truncated is False
+    assert (result.key_size, result.key_encoding) == (11, ContentEncoding.TEXT)
+
+
+def test_missing_key_is_not_reported_as_withheld() -> None:
+    result = sanitize_message(
+        _message(key=None), SanitizationPolicy(keys_enabled=False)
+    )
+    assert (result.key, result.key_withheld) == (None, False)
+    assert result.key_encoding is ContentEncoding.NULL
+
+
 def test_long_keys_and_header_values_are_truncated() -> None:
     policy = SanitizationPolicy(max_key_bytes=4, max_header_value_bytes=3)
     result = sanitize_message(

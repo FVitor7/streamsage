@@ -49,7 +49,9 @@ def adapter(gateway: KafkaAdminGateway) -> KafkaConsumerGroupAdapter:
 
 
 def test_seeded_groups_are_listed(adapter: KafkaConsumerGroupAdapter) -> None:
-    groups = {g.group_id: g for g in ListConsumerGroupsUseCase(adapter).execute()}
+    listing = ListConsumerGroupsUseCase(adapter).execute()
+    assert listing.complete is True
+    groups = {g.group_id: g for g in listing.groups}
     assert {"orders-service", "payments-service", "inventory-service"} <= set(groups)
     assert groups["orders-service"].state is ConsumerGroupState.EMPTY
     assert groups["orders-service"].is_simple is True

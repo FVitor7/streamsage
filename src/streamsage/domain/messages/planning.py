@@ -155,6 +155,11 @@ class ScanPlan:
     ranges: tuple[OffsetRange, ...]
     coverage: tuple[ScanCoverage, ...]
     per_partition_limit: int
+    uncovered_partitions: tuple[int, ...] = ()
+
+    @property
+    def planned_messages(self) -> int:
+        return sum(r.size for r in self.ranges)
 
 
 def plan_key_scan(
@@ -165,11 +170,24 @@ def plan_key_scan(
 ) -> ScanPlan:
     """Scan the newest messages of each partition, within both budgets.
 
-    The total budget is split evenly across the selected partitions, so a
-    topic with many partitions scans fewer messages per partition.
+    ``max_total`` is a hard limit: the plan never covers more messages. It is
+    split evenly across the non-empty partitions, so a topic with many
+    partitions scans fewer messages per partition. When there are more
+    non-empty partitions than ``max_total``, one message is scanned from
+    each of the first ``max_total`` partitions (lowest ids, so the choice is
+    deterministic) and the rest are reported as uncovered.
     """
+    if max_per_partition < 1 or max_total < 1:
+        raise InvalidInputError("Key search budgets must be at least 1.")
     selected = _select(offsets, partition)
-    per_partition = max(1, min(max_per_partition, max_total // max(len(selected), 1)))
+    non_empty = [p for p in selected if p.high > p.low]
+    per_partition = min(max_per_partition, max_total // max(len(non_empty), 1))
+    covered = non_empty
+    if per_partition < 1:
+        per_partition = 1
+        covered = non_empty[:max_total]
+    covered_ids = {p.partition for p in covered}
+    uncovered = tuple(p.partition for p in non_empty if p.partition not in covered_ids)
     coverage = tuple(
         ScanCoverage(
             partition=p.partition,
@@ -178,13 +196,14 @@ def plan_key_scan(
             first_available_offset=p.low,
         )
         for p in selected
+        if p.partition not in uncovered
     )
     ranges = tuple(
         OffsetRange(c.partition, c.from_offset, c.to_offset)
         for c in coverage
         if c.scanned_count > 0
     )
-    return ScanPlan(ranges, coverage, per_partition)
+    return ScanPlan(ranges, coverage, per_partition, uncovered)
 
 
 def readable_partitions(

@@ -170,7 +170,9 @@ def test_list_consumer_groups_maps_states() -> None:
             ]
         )
     )
-    groups = {g.group_id: g for g in _adapter(admin).list_consumer_groups()}
+    listing = _adapter(admin).list_consumer_groups()
+    assert listing.complete is True and listing.failure_codes == ()
+    groups = {g.group_id: g for g in listing.groups}
     assert groups["a"].state is State.STABLE
     assert groups["b"].state is State.EMPTY and groups["b"].is_simple is True
     assert groups["c"].state is State.PREPARING_REBALANCE
@@ -196,10 +198,18 @@ def test_partial_listing_returns_groups_and_warns(
     admin = FakeAdminClient(
         listing=ListConsumerGroupsResult(
             valid=[ConsumerGroupListing("a", False, ConsumerGroupState.STABLE)],
-            errors=[_kafka_error(KafkaError.UNKNOWN)],
+            errors=[
+                _kafka_error(KafkaError._TRANSPORT),
+                _kafka_error(KafkaError._TRANSPORT),
+                RuntimeError("unexpected"),
+            ],
         )
     )
-    assert [g.group_id for g in _adapter(admin).list_consumer_groups()] == ["a"]
+    listing = _adapter(admin).list_consumer_groups()
+    assert [g.group_id for g in listing.groups] == ["a"]
+    assert listing.complete is False
+    assert listing.failed_brokers == 3
+    assert listing.failure_codes == ("RuntimeError", "_TRANSPORT")
     assert "consumer group listing is partial" in caplog.text
 
 

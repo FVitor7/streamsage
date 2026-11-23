@@ -11,6 +11,10 @@ import pytest
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
+from streamsage.application.use_cases.find_messages_by_key import (
+    FindMessagesByKeyUseCase,
+    KeySearchLimits,
+)
 from streamsage.application.use_cases.inspect_messages import InspectMessagesUseCase
 from streamsage.domain.messages.sanitizer import PayloadTreatment, SanitizationPolicy
 from streamsage.infrastructure.config.settings import Settings
@@ -111,3 +115,23 @@ def test_huge_messages_are_reported_but_never_decoded(
     assert by_key["big"].payload_treatment is PayloadTreatment.TOO_LARGE
     assert by_key["big"].payload_size == LARGE_MESSAGE_BYTES + len('{"blob":""}')
     assert by_key["small"].payload_treatment is PayloadTreatment.JSON_REDACTED
+
+
+@pytest.mark.usefixtures("large_topics")
+def test_key_search_budget_is_a_hard_limit_on_a_thousand_partitions(
+    reader: KafkaMessageAdapter,
+) -> None:
+    use_case = FindMessagesByKeyUseCase(
+        reader,
+        SanitizationPolicy(),
+        KeySearchLimits(
+            max_results=5, max_scan_per_partition=1_000, max_scan_total=100
+        ),
+    )
+    # Message i went to partition i % 1000, so the newest in partition 5 is
+    # "k-2005"; only the first 100 partitions fit in the budget.
+    result = use_case.execute(MANY, "k-2005", limit=5)
+    assert result.scanned <= 100
+    assert [(m.partition, m.key) for m in result.matches] == [(5, "k-2005")]
+    assert result.uncovered_partitions == tuple(range(100, PARTITIONS))
+    assert result.searched_whole_topic is False

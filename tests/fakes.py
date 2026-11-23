@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from streamsage.domain.entities.cluster import Broker, Cluster
 from streamsage.domain.entities.consumer_group import (
     ConsumerGroup,
+    ConsumerGroupListing,
     ConsumerGroupState,
     ConsumerGroupSummary,
     GroupMember,
@@ -143,17 +144,22 @@ class FakeConsumerGroupReader:
         group: ConsumerGroup = SAMPLE_GROUP,
         lag: list[PartitionLag] | None = None,
         error: Exception | None = None,
+        failed_brokers: int = 0,
     ) -> None:
         self.groups = SAMPLE_GROUPS if groups is None else groups
+        self.failed_brokers = failed_brokers
         self.group = group
         self.lag = SAMPLE_LAG if lag is None else lag
         self.error = error
         self.requested: list[str] = []
 
-    def list_consumer_groups(self) -> list[ConsumerGroupSummary]:
+    def list_consumer_groups(self) -> ConsumerGroupListing:
         if self.error is not None:
             raise self.error
-        return list(self.groups)
+        codes = ("_TRANSPORT",) if self.failed_brokers else ()
+        return ConsumerGroupListing(
+            tuple(self.groups), failed_brokers=self.failed_brokers, failure_codes=codes
+        )
 
     def describe_consumer_group(self, group_id: str) -> ConsumerGroup:
         self.requested.append(group_id)
