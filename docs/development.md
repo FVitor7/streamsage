@@ -181,7 +181,7 @@ The suite checks that:
 ```mermaid
 flowchart LR
     subgraph base["docker compose (default)"]
-        k["kafka · apache/kafka:4.3.2<br/>KRaft · localhost:9092"]
+        k["kafka · apache/kafka<br/>KRaft · localhost:9092"]
         init["kafka-init<br/>one-shot seed job"]
         cons["kafka-consumer<br/>keeps inventory-service active"]
         ui["kafka-ui · kafbat<br/>localhost:8080"]

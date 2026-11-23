@@ -6,6 +6,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Development
+- The local and CI Kafka brokers run Kafka 4.4.0 (Dependabot update). The
+  full integration and security suites pass against it from clean volumes.
+- `docker/kafka-secure/setup.sh` reads the broker image from
+  `docker-compose.yml` instead of pinning its own, so image updates apply
+  to certificate generation too.
+- Docs no longer name a fixed Kafka minor version for the local broker;
+  the guarantees they describe are checked by the integration tests on
+  every CI run.
+- Release attestations cover only the wheel and the sdist (v1.1.1 also
+  listed the `dist/.gitignore` that `uv build` writes).
+
 ## [1.1.1] - 2026-11-23
 
 Release and CI hardening. No change to StreamSage's behavior.

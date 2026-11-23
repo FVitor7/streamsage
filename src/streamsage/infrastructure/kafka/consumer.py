@@ -3,7 +3,7 @@
 The consumer only ever uses ``assign()`` with explicit offsets. It never
 subscribes, so it never joins a consumer group, and it never commits
 offsets. ``group.id`` is set only because librdkafka requires it; the group
-does not appear on the cluster (verified against Kafka 4.3).
+does not appear on the cluster (checked by the integration tests).
 """
 
 import logging

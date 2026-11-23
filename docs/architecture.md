@@ -186,9 +186,10 @@ StreamSage never issues one.
 `describe_topic` uses the DescribeTopics admin API
 (`AdminClient.describe_topics`), which requests only the named topic. Its
 cost therefore no longer grows with the size of the cluster. It reports
-`UNKNOWN_TOPIC_OR_PART` for a missing topic and does not create it; this was
-verified against Kafka 4.3 with confluent-kafka 2.16, and
-`test_missing_topic_raises_and_is_never_created` guards it on every run. The
+`UNKNOWN_TOPIC_OR_PART` for a missing topic and does not create it. This
+was first verified against Kafka 4.3 with confluent-kafka 2.16, and
+`test_missing_topic_raises_and_is_never_created` checks it on every CI run
+against the broker version pinned in `docker-compose.yml`. The
 local Docker broker keeps auto-creation enabled on purpose.
 
 ### One gateway for every Kafka request

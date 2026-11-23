@@ -81,7 +81,8 @@ Then, from the repository directory:
 make kafka-up
 ```
 
-This starts a single Kafka 4.3 broker in KRaft mode and seeds it. It takes
+This starts a single Kafka 4 broker in KRaft mode (the exact version is pinned in
+`docker-compose.yml`) and seeds it. It takes
 about 30 seconds on first run; later runs reuse the data. It also starts:
 
 | Container | Purpose | Address |

@@ -86,9 +86,10 @@ Narrow `--topic '*'` to specific topics or prefixes
 
 > **Note:** message reads use a fixed `group.id`,
 > `streamsage-inspector-readonly`, because librdkafka requires one. The group
-> is never joined and does not appear on the cluster (verified against
-> Kafka 4.3). This has not been tested against a broker enforcing ACLs. If
-> yours requires `Read` on that group, grant it, and please report it.
+> is never joined and does not appear on the cluster; the integration tests
+> check this on every CI run. This has not been tested against a broker
+> enforcing ACLs. If yours requires `Read` on that group, grant it, and
+> please report it.
 
 ## Credentials
 
