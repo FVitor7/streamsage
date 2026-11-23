@@ -146,3 +146,22 @@ def test_dlq_summary_is_capped() -> None:
     overview = _dlq_use_case(["*.DLQ"], names).execute()
     assert len(overview.topics) == MAX_DLQ_TOPICS
     assert "only the first" in overview.notes[0]
+
+
+def test_unavailable_partitions_prevent_whole_topic_claims() -> None:
+    reader = FakeMessageReader(messages=_messages(), unavailable=(5,))
+    result = _use_case(reader).execute("orders", "k-3", limit=5)
+    assert result.searched_whole_topic is False
+    assert result.unavailable_partitions == (5,)
+    assert any("partition(s) 5 are unavailable" in note for note in result.notes)
+
+
+def test_dlq_counts_note_unavailable_partitions() -> None:
+    use_case = ListDlqTopicsUseCase(
+        FakeTopicReader([make_topic("orders.DLQ")]),
+        FakeMessageReader(offsets=[PartitionOffsets(0, 0, 4)], unavailable=(1,)),
+        DlqTopicMatcher(["*.DLQ"]),
+    )
+    overview = use_case.execute()
+    assert [(t.partition_count, t.message_count) for t in overview.topics] == [(2, 4)]
+    assert "1 partition(s) are unavailable" in overview.notes[0]

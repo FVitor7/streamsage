@@ -92,6 +92,8 @@ Unknown codes are rejected at startup. Valid codes are listed in
 | `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` | `1024` | `1–65536` | Payload preview limit, applied after redaction |
 | `STREAMSAGE_MESSAGE_DEFAULT_LIMIT` | `20` | ≥ 1 | Default `limit` for `inspect_messages` and `find_messages_by_key` |
 | `STREAMSAGE_MESSAGE_MAX_LIMIT` | `100` | `1–1000` | Maximum `limit`; must be ≥ the default |
+| `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` | `10000` | `1–1000000` | Messages `inspect_messages` may read per call, across partitions; must be ≥ the max limit. Beyond it the result is marked `exact: false` |
+| `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` | `262144` | `1–16777216` | Payloads larger than this are neither kept in memory nor decoded (`too_large`); must be ≥ the preview limit |
 | `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` | – | comma-separated names | Extra field and header names to redact, added to the built-in list |
 | `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_PER_PARTITION` | `1000` | `1–100000` | Newest messages scanned per partition by key search |
 | `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_TOTAL` | `10000` | `1–1000000` | Total key-search budget, split across partitions |

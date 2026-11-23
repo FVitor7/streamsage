@@ -453,12 +453,29 @@ the [data protection rules](security.md#data-protection).
 | `json_redacted` | JSON with sensitive fields replaced by `[REDACTED]`, then truncated |
 | `text_truncated` | Not JSON: truncated only (field-name redaction cannot apply) |
 | `binary` | Not UTF-8 (Avro, Protobuf, …): not decoded |
+| `too_large` | Above `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` (256 KiB by default): neither kept in memory nor decoded; only the size is shown |
 | `null` | No payload (for example a tombstone) |
 
 ### `inspect_messages`
 
 Without `start_offset`: the newest messages, newest first. With `partition`
 and `start_offset`: up to `limit` messages from that offset, in offset order.
+
+`limit` bounds the **output**. A separate read budget,
+`STREAMSAGE_MESSAGE_INSPECT_MAX_READ` (10,000 by default), bounds how many
+messages may be **read**. The globally newest `limit` messages can sit in any
+partition, so an exact answer needs the newest `limit` messages of every
+partition:
+
+| Situation | Reads | `exact` |
+| --- | --- | --- |
+| `partitions × limit ≤ budget` | The newest `limit` of each partition | `true`: guaranteed newest |
+| Over budget | Fewer per partition (budget ÷ partitions) | `false`: newest *among those read*, explained in `notes` |
+| More partitions than the budget | One message from the first partitions | `false`, with the uncovered partitions in `notes` |
+| Some partition offsets unavailable | The available partitions | `false`, with the unavailable partitions in `notes` |
+
+Only the `limit` newest messages are held in memory while reading, however
+many are read (`messages_read`).
 
 | Parameter | Type | Default | Constraints |
 | --- | --- | --- | --- |
@@ -476,6 +493,8 @@ Reading `customers.updated` (fake personal data) from offset 0:
   "max_payload_bytes": 1024,
   "message_count": 1,
   "complete": true,
+  "exact": true,
+  "messages_read": 1,
   "notes": [],
   "messages": [
     {

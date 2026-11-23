@@ -67,10 +67,16 @@ class ListDlqTopicsUseCase:
             topics.append(
                 DlqTopicSummary(
                     name=name,
-                    partition_count=len(offsets),
-                    message_count=sum(p.message_count for p in offsets),
+                    partition_count=offsets.partition_count,
+                    message_count=sum(p.message_count for p in offsets.partitions),
                 )
             )
+            if offsets.unavailable_partitions:
+                notes.append(
+                    f"{name}: offsets of {len(offsets.unavailable_partitions)} "
+                    "partition(s) are unavailable; its message count only covers "
+                    "the other partitions."
+                )
         topics.sort(key=lambda t: (-t.message_count, t.name))
         return DlqOverview(
             configured=True,

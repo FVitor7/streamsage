@@ -190,6 +190,8 @@ MCP client, and from there to an LLM. The defaults are conservative:
 | Payloads returned | **No**; size only | `STREAMSAGE_MESSAGE_PAYLOADS_ENABLED` |
 | Redaction of sensitive JSON fields and headers | Always on | `STREAMSAGE_MESSAGE_SENSITIVE_FIELDS` adds terms |
 | Payload preview size | 1 KB, after redaction | `STREAMSAGE_MESSAGE_MAX_PAYLOAD_BYTES` |
+| Largest payload decoded or kept in memory | 256 KiB; larger ones are reported as `too_large` with their size | `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` |
+| Messages read per `inspect_messages` call | 10,000 across partitions; only the returned `limit` are kept in memory | `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` |
 | Key and header value size | 256 bytes | – |
 | Messages per call | 20 by default, 100 maximum | `STREAMSAGE_MESSAGE_DEFAULT_LIMIT`, `STREAMSAGE_MESSAGE_MAX_LIMIT` |
 | Key search scan | 1,000 per partition, 10,000 total | `STREAMSAGE_MESSAGE_KEY_SEARCH_MAX_*` |

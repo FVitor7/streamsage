@@ -2,7 +2,11 @@ from dataclasses import dataclass
 
 from streamsage.application.ports.message_reader import MessageReader
 from streamsage.domain.exceptions import InvalidInputError
-from streamsage.domain.messages.planning import ScanCoverage, plan_key_scan
+from streamsage.domain.messages.planning import (
+    ScanCoverage,
+    plan_key_scan,
+    readable_partitions,
+)
 from streamsage.domain.messages.sanitizer import (
     InspectedMessage,
     SanitizationPolicy,
@@ -34,10 +38,15 @@ class KeySearchResult:
     coverage: tuple[ScanCoverage, ...]
     complete: bool
     notes: tuple[str, ...]
+    unavailable_partitions: tuple[int, ...] = ()
 
     @property
     def searched_whole_topic(self) -> bool:
-        return self.complete and all(c.reaches_start for c in self.coverage)
+        return (
+            self.complete
+            and not self.unavailable_partitions
+            and all(c.reaches_start for c in self.coverage)
+        )
 
 
 class FindMessagesByKeyUseCase:
@@ -64,8 +73,11 @@ class FindMessagesByKeyUseCase:
         name = validate_topic_name(topic)
         key_bytes = self._validate(key, limit, partition)
         offsets = self._reader.partition_offsets(name)
+        readable, unavailable, unavailable_notes = readable_partitions(
+            offsets, partition
+        )
         plan = plan_key_scan(
-            offsets,
+            readable,
             self._limits.max_scan_per_partition,
             self._limits.max_scan_total,
             partition,
@@ -75,7 +87,7 @@ class FindMessagesByKeyUseCase:
             scan.matches, key=lambda m: (m.timestamp_ms or 0, m.offset), reverse=True
         )[:limit]
 
-        notes = []
+        notes = list(unavailable_notes)
         partial = [c.partition for c in plan.coverage if not c.reaches_start]
         if partial:
             notes.append(
@@ -97,6 +109,7 @@ class FindMessagesByKeyUseCase:
             coverage=plan.coverage,
             complete=scan.complete,
             notes=tuple(notes),
+            unavailable_partitions=unavailable,
         )
 
     def _validate(self, key: str, limit: int, partition: int | None) -> bytes:

@@ -6,6 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `inspect_messages` could read up to `limit` messages from **every**
+  partition and hold them all in memory (for example 50,000 messages for
+  `limit=100` on 500 partitions). It now keeps only the `limit` newest while
+  reading, and enforces a global read budget
+  (`STREAMSAGE_MESSAGE_INSPECT_MAX_READ`, default 10,000). Results report
+  `exact` (whether they are guaranteed to be the newest) and
+  `messages_read`.
+- Payloads of any size were kept in memory and parsed with `json.loads` to
+  build a 1 KB preview. Payloads above `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES`
+  (default 256 KiB) are now dropped as they are read and reported as
+  `too_large`. Keys and headers decode only the prefix they need.
+- Partition offsets were fetched with one request per partition, each with
+  its own timeout. They now use two batched ListOffsets requests per topic,
+  which also speeds up `find_messages_by_key` and `list_dlq_topics`.
+  Partitions whose offsets cannot be read are reported as unavailable
+  instead of failing the whole call.
+
 ### Documentation
 - New user guides: getting started (release package vs source checkout),
   connecting clients (Claude Code, Claude Desktop, MCP Inspector, HTTP),

@@ -459,7 +459,8 @@ class MessageResponse(BaseModel):
         description=(
             "omitted (payloads disabled), null (no payload), json_redacted "
             "(sensitive fields redacted, then truncated), text_truncated (not "
-            "JSON: truncated only), binary (not decoded)."
+            "JSON: truncated only), binary (not decoded), too_large (above the "
+            "decode limit: not decoded, size only)."
         )
     )
     payload_preview: str | None
@@ -503,6 +504,16 @@ class MessageInspectionResponse(BaseModel):
     max_payload_bytes: int
     message_count: int
     complete: bool = Field(description="False if the read stopped early (timeout).")
+    exact: bool = Field(
+        description=(
+            "True when these are guaranteed to be the newest messages (or the "
+            "requested range). False when the read budget, unavailable "
+            "partitions or a timeout limited what was read; see notes."
+        )
+    )
+    messages_read: int = Field(
+        description="Messages read from Kafka to produce this result."
+    )
     notes: list[str]
     messages: list[MessageResponse]
 

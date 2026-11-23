@@ -48,6 +48,8 @@ async def test_inspect_messages_without_payloads(client: Client) -> None:
     assert data is not None
     assert data["payloads_included"] is False
     assert data["message_count"] == 1
+    assert data["exact"] is True
+    assert data["messages_read"] == 1
     message = data["messages"][0]
     assert message["timestamp"] == "2023-11-14T22:13:20+00:00"
     assert message["key"] == "cust-1"

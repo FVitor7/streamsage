@@ -3,8 +3,12 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from streamsage.domain.entities.message import OffsetRange, PartitionOffsets
-from streamsage.domain.exceptions import InvalidInputError
+from streamsage.domain.entities.message import (
+    OffsetRange,
+    PartitionOffsets,
+    TopicOffsets,
+)
+from streamsage.domain.exceptions import InvalidInputError, KafkaMetadataError
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,21 +17,75 @@ class ReadPlan:
     notes: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class LatestPlan:
+    """Plan for "the newest ``limit`` messages" under a read budget.
+
+    The globally newest ``limit`` messages can sit in any partition, so an
+    exact answer requires reading the newest ``min(limit, available)``
+    messages of *every* partition. When that exceeds ``max_read``, fewer
+    messages are read per partition and ``exact`` is False: the answer is
+    the newest messages *among those read*.
+    """
+
+    ranges: tuple[OffsetRange, ...]
+    exact: bool
+    per_partition: int
+    planned_messages: int
+    uncovered_partitions: tuple[int, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
 def plan_latest(
-    offsets: Sequence[PartitionOffsets], limit: int, partition: int | None = None
-) -> ReadPlan:
-    """The newest ``limit`` messages of each selected partition."""
+    offsets: Sequence[PartitionOffsets],
+    limit: int,
+    max_read: int,
+    partition: int | None = None,
+) -> LatestPlan:
+    """Read the newest messages of each selected partition, within ``max_read``."""
+    if max_read < 1:
+        raise InvalidInputError("max_read must be at least 1.")
     selected = _select(offsets, partition)
-    ranges = tuple(
-        OffsetRange(p.partition, max(p.high - limit, p.low), p.high)
-        for p in selected
-        if p.high > p.low
-    )
+    non_empty = [p for p in selected if p.high > p.low]
     notes = []
     empty = [p.partition for p in selected if p.high <= p.low]
     if empty:
         notes.append(f"Partition(s) {_list(empty)} currently hold no messages.")
-    return ReadPlan(ranges, tuple(notes))
+
+    wanted = {p.partition: min(limit, p.message_count) for p in non_empty}
+    if sum(wanted.values()) <= max_read:
+        ranges = tuple(
+            OffsetRange(p.partition, p.high - wanted[p.partition], p.high)
+            for p in non_empty
+        )
+        return LatestPlan(ranges, True, limit, sum(wanted.values()), notes=tuple(notes))
+
+    # Over budget: spread it evenly. If there are more partitions than
+    # messages in the budget, read one message from the first ``max_read``
+    # partitions (lowest ids, so the choice is deterministic).
+    per_partition = max(max_read // len(non_empty), 1)
+    covered = non_empty[: max_read // per_partition]
+    uncovered = tuple(p.partition for p in non_empty[len(covered) :])
+    ranges = tuple(
+        OffsetRange(p.partition, max(p.high - per_partition, p.low), p.high)
+        for p in covered
+    )
+    planned = sum(r.size for r in ranges)
+    exact = not uncovered and all(r.size >= wanted[r.partition] for r in ranges)
+    if not exact:
+        notes.append(
+            f"Read budget reached: read up to {per_partition} newest message(s) "
+            f"from each of {len(covered)} partition(s) instead of {limit}, so "
+            "these are the newest messages among those read, not necessarily "
+            "the newest in the topic."
+        )
+    if uncovered:
+        notes.append(
+            f"{len(uncovered)} partition(s) were not read at all because the "
+            f"read budget ({max_read} messages) is smaller than the number of "
+            "partitions."
+        )
+    return LatestPlan(ranges, exact, per_partition, planned, uncovered, tuple(notes))
 
 
 def plan_from_offset(
@@ -127,3 +185,27 @@ def plan_key_scan(
         if c.scanned_count > 0
     )
     return ScanPlan(ranges, coverage, per_partition)
+
+
+def readable_partitions(
+    offsets: TopicOffsets, partition: int | None
+) -> tuple[list[PartitionOffsets], tuple[int, ...], tuple[str, ...]]:
+    """Partitions that can be read, the unavailable ones, and notes about them.
+
+    Asking for one specific partition whose offsets are unavailable is an
+    error; otherwise unavailable partitions are reported, never silently
+    skipped.
+    """
+    if partition is not None and partition in offsets.unavailable_partitions:
+        raise KafkaMetadataError(
+            f"Offsets of partition {partition} are unavailable (for example, it "
+            "has no leader right now); it cannot be read."
+        )
+    unavailable = () if partition is not None else offsets.unavailable_partitions
+    notes: tuple[str, ...] = ()
+    if unavailable:
+        notes = (
+            f"Offsets of partition(s) {_list(unavailable)} are unavailable (for "
+            "example, no leader right now); they were not read.",
+        )
+    return list(offsets.partitions), unavailable, notes

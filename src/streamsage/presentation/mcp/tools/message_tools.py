@@ -91,6 +91,8 @@ def register_message_tools(
             max_payload_bytes=result.max_payload_bytes,
             message_count=len(result.messages),
             complete=result.complete,
+            exact=result.exact,
+            messages_read=result.messages_read,
             notes=list(result.notes),
             messages=[MessageResponse.from_domain(m) for m in result.messages],
         )

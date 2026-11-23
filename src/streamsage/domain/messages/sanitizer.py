@@ -14,6 +14,7 @@ Field-name matching cannot see secrets inside free text, so non-JSON text
 payloads are only truncated. Responses say which treatment was applied.
 """
 
+import codecs
 import json
 import re
 from dataclasses import dataclass
@@ -65,6 +66,7 @@ class PayloadTreatment(StrEnum):
     JSON_REDACTED = "json_redacted"  # sensitive fields redacted, then truncated
     TEXT_TRUNCATED = "text_truncated"  # not JSON: truncated only
     BINARY = "binary"  # not UTF-8: not decoded
+    TOO_LARGE = "too_large"  # above max_decode_bytes: never decoded or parsed
 
 
 class ContentEncoding(StrEnum):
@@ -79,12 +81,24 @@ class SanitizationPolicy:
     max_payload_bytes: int = 1024
     max_key_bytes: int = 256
     max_header_value_bytes: int = 256
+    # Payloads larger than this are not decoded or parsed at all, which bounds
+    # the CPU and memory spent on a single message.
+    max_decode_bytes: int = 256 * 1024
     sensitive_terms: frozenset[str] = DEFAULT_SENSITIVE_TERMS
 
     def __post_init__(self) -> None:
-        for name in ("max_payload_bytes", "max_key_bytes", "max_header_value_bytes"):
+        for name in (
+            "max_payload_bytes",
+            "max_key_bytes",
+            "max_header_value_bytes",
+            "max_decode_bytes",
+        ):
             if getattr(self, name) < 1:
                 raise InvalidInputError(f"{name} must be at least 1.")
+        if self.max_decode_bytes < self.max_payload_bytes:
+            raise InvalidInputError(
+                "max_decode_bytes must be at least max_payload_bytes."
+            )
         normalized = frozenset(
             term for term in (normalize_name(t) for t in self.sensitive_terms) if term
         )
@@ -130,7 +144,7 @@ def sanitize_message(
     key, key_encoding, key_truncated = _decode_limited(
         message.key, policy.max_key_bytes
     )
-    payload = _sanitize_payload(message.value, policy)
+    payload = _sanitize_payload(message, policy)
     return InspectedMessage(
         topic=message.topic,
         partition=message.partition,
@@ -142,7 +156,7 @@ def sanitize_message(
         key_encoding=key_encoding,
         key_truncated=key_truncated,
         headers=tuple(_sanitize_header(h, policy) for h in message.headers),
-        payload_size=None if message.value is None else len(message.value),
+        payload_size=message.value_size,
         payload_treatment=payload.treatment,
         payload_preview=payload.preview,
         payload_truncated=payload.truncated,
@@ -158,11 +172,15 @@ class _Payload:
     redacted_fields: tuple[str, ...] = ()
 
 
-def _sanitize_payload(value: bytes | None, policy: SanitizationPolicy) -> _Payload:
+def _sanitize_payload(message: RawMessage, policy: SanitizationPolicy) -> _Payload:
+    value = message.value
     if value is None:
         return _Payload(PayloadTreatment.NULL)
     if not policy.payloads_enabled:
         return _Payload(PayloadTreatment.OMITTED)
+    size = message.value_size or 0
+    if message.value_truncated or size > policy.max_decode_bytes:
+        return _Payload(PayloadTreatment.TOO_LARGE)
     try:
         text = value.decode("utf-8")
     except UnicodeDecodeError:
@@ -235,14 +253,20 @@ def _sanitize_header(header: RawHeader, policy: SanitizationPolicy) -> Inspected
 def _decode_limited(
     raw: bytes | None, max_bytes: int
 ) -> tuple[str | None, ContentEncoding, bool]:
+    """Decode at most ``max_bytes`` of ``raw`` as UTF-8.
+
+    Only the needed prefix is decoded, so a huge key or header costs no more
+    than a small one. A multi-byte character cut by the limit is dropped.
+    """
     if raw is None:
         return None, ContentEncoding.NULL, False
+    truncated = len(raw) > max_bytes
+    decoder = codecs.getincrementaldecoder("utf-8")()
     try:
-        text = raw.decode("utf-8")
+        text = decoder.decode(raw[:max_bytes], final=not truncated)
     except UnicodeDecodeError:
         return None, ContentEncoding.BINARY, False
-    value, truncated = truncate_utf8(text, max_bytes)
-    return value, ContentEncoding.TEXT, truncated
+    return text, ContentEncoding.TEXT, truncated
 
 
 def truncate_utf8(text: str, max_bytes: int) -> tuple[str, bool]:

@@ -31,13 +31,26 @@ class RawMessage:
     key: bytes | None
     value: bytes | None
     headers: tuple[RawHeader, ...] = ()
+    # Original payload size when ``value`` was not kept in full (see
+    # ``value_truncated``); otherwise the size is ``len(value)``.
+    original_value_size: int | None = None
+
+    @property
+    def value_size(self) -> int | None:
+        if self.original_value_size is not None:
+            return self.original_value_size
+        return None if self.value is None else len(self.value)
+
+    @property
+    def value_truncated(self) -> bool:
+        """True when the payload was too large to keep and was dropped."""
+        return self.original_value_size is not None
 
     def __repr__(self) -> str:
         # Never render payload bytes, even in tracebacks or debug output.
-        size = None if self.value is None else len(self.value)
         return (
             f"RawMessage(topic={self.topic!r}, partition={self.partition}, "
-            f"offset={self.offset}, value_size={size})"
+            f"offset={self.offset}, value_size={self.value_size})"
         )
 
 
@@ -82,6 +95,24 @@ class MessageReadResult:
 
     messages: tuple[RawMessage, ...]
     complete: bool
+    messages_read: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class TopicOffsets:
+    """Offsets of a topic's partitions.
+
+    ``unavailable_partitions`` lists partitions whose offsets could not be
+    read (for example while a partition has no leader); they cannot be read
+    either, and callers must say so rather than silently skip them.
+    """
+
+    partitions: tuple[PartitionOffsets, ...]
+    unavailable_partitions: tuple[int, ...] = ()
+
+    @property
+    def partition_count(self) -> int:
+        return len(self.partitions) + len(self.unavailable_partitions)
 
 
 @dataclass(frozen=True, slots=True)

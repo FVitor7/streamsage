@@ -327,10 +327,26 @@ rest of the server:
   Retention gaps and empty partitions become explicit notes.
 - Pure domain sanitization (`domain/messages/sanitizer.py`) turns raw
   messages into `InspectedMessage`s before they leave the application layer.
-- `KafkaMessageAdapter` creates a short-lived consumer per call, assigns the
-  planned ranges, reads up to their end (or the partition end, or the
-  timeout), and closes the consumer. A timeout yields a partial result
-  marked `complete: false`.
+- `KafkaMessageAdapter` reads partition offsets with two batched ListOffsets
+  requests (earliest and latest) through the gateway, not one watermark
+  request per partition. Partitions whose offsets cannot be read are
+  reported as unavailable, not silently skipped.
+- For reads, it creates a short-lived consumer per call, assigns the planned
+  ranges, reads up to their end (or the partition end, or the timeout), and
+  closes the consumer. A timeout yields a partial result marked
+  `complete: false`.
+- **Bounded resources.** `limit` bounds the output, and
+  `STREAMSAGE_MESSAGE_INSPECT_MAX_READ` bounds how many messages are read.
+  While reading, `NewestMessages` (a heap in `domain/messages/selection.py`)
+  keeps only the `limit` newest, so memory does not grow with the number of
+  partitions. An exact "newest N" needs N messages from every partition.
+  When the budget does not allow that, the plan reads fewer per partition
+  and the result is marked `exact: false`. Payloads above
+  `STREAMSAGE_MESSAGE_MAX_DECODE_BYTES` are dropped as they are read (only
+  their size is kept) and are never decoded or parsed.
+  `max.partition.fetch.bytes` does not cap a single message: Kafka always
+  returns at least one whole message, so an oversized message still
+  crosses the network once.
 
 ### Key search
 
